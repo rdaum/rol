@@ -22,14 +22,14 @@
 //! TODO: Will not work on BigEndian platforms
 //! Based on https://github.com/zuiderkwast/Var/blob/master/Var.h
 
-use crate::environment::Environment;
-use crate::heap::{LispString, LispTuple};
 use crate::protocol::{TypeProtocol, get_protocol};
 use crate::symbol::Symbol;
 use std::cmp::Ordering;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::ops::{Add, Div, Mul, Rem, Sub};
+use crate::gc::{is_mmtk_initialized, register_var_as_root};
+use crate::heap::{Environment, LispClosure, LispString, LispTuple};
 
 pub const BOOLEAN_FALSE: u64 = 0x00; // Perfect for truth tables!
 pub const BOOLEAN_TRUE: u64 = 0x01;
@@ -166,8 +166,8 @@ impl Var {
 
         // Register the newly allocated tuple as a thread root immediately
         // This prevents GC from collecting it if a collection happens during evaluation
-        if crate::mmtk_binding::is_mmtk_initialized() {
-            crate::mmtk_binding::register_var_as_root(var, false); // false = thread root
+        if is_mmtk_initialized() {
+            register_var_as_root(var, false); // false = thread root
         }
 
         var
@@ -180,8 +180,8 @@ impl Var {
 
         // Register the newly allocated empty tuple as a thread root immediately
         // This prevents GC from collecting it if a collection happens during evaluation
-        if crate::mmtk_binding::is_mmtk_initialized() {
-            crate::mmtk_binding::register_var_as_root(var, false); // false = thread root
+        if is_mmtk_initialized() {
+            register_var_as_root(var, false); // false = thread root
         }
 
         var
@@ -193,8 +193,8 @@ impl Var {
 
         // Register the newly allocated string as a thread root immediately
         // This prevents GC from collecting it if a collection happens during evaluation
-        if crate::mmtk_binding::is_mmtk_initialized() {
-            crate::mmtk_binding::register_var_as_root(var, false); // false = thread root
+        if is_mmtk_initialized() {
+            register_var_as_root(var, false); // false = thread root
         }
 
         var
@@ -207,23 +207,23 @@ impl Var {
 
         // Register the environment as a thread root if it contains heap objects
         // This prevents GC from collecting the environment during evaluation
-        if crate::mmtk_binding::is_mmtk_initialized() {
-            crate::mmtk_binding::register_var_as_root(var, false); // false = thread root
+        if is_mmtk_initialized() {
+            register_var_as_root(var, false); // false = thread root
         }
 
         var
     }
 
     /// Create a Var from a closure pointer
-    pub fn closure(ptr: *mut crate::heap::LispClosure) -> Self {
+    pub fn closure(ptr: *mut LispClosure) -> Self {
         let ptr_bits = ptr as u64;
         let tagged_ptr = ptr_bits | CLOSURE_POINTER_TAG;
         let var = Self(ValueUnion { value: tagged_ptr });
 
         // Register the closure as a thread root immediately
         // This prevents GC from collecting it during evaluation
-        if crate::mmtk_binding::is_mmtk_initialized() {
-            crate::mmtk_binding::register_var_as_root(var, false); // false = thread root
+        if is_mmtk_initialized() {
+            register_var_as_root(var, false); // false = thread root
         }
 
         var
@@ -415,10 +415,10 @@ impl Var {
         }
     }
 
-    pub fn as_closure(&self) -> Option<*mut crate::heap::LispClosure> {
+    pub fn as_closure(&self) -> Option<*mut LispClosure> {
         if self.is_closure() {
             let ptr_bits = unsafe { self.0.value } & !POINTER_TAG_MASK;
-            Some(ptr_bits as *mut crate::heap::LispClosure)
+            Some(ptr_bits as *mut LispClosure)
         } else {
             None
         }

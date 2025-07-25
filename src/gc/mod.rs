@@ -14,9 +14,16 @@
 //! Garbage collection integration for heap-allocated types.
 //! Provides root enumeration and child tracing for GC systems like mmtk.
 
-use crate::environment::Environment;
-use crate::heap::{LispClosure, LispString, LispTuple};
 use crate::var::Var;
+
+mod mmtk_binding;
+
+pub use mmtk_binding::{
+    WriteBarrierGuard, clear_thread_roots, initialize_mmtk, jit_global_write_barrier,
+    jit_heap_write_barrier, jit_memory_write_barrier, jit_safepoint_check, jit_stack_write_barrier,
+    mmtk_alloc, mmtk_alloc_placeholder, mmtk_bind_mutator, mmtk_dealloc_placeholder,
+    register_global_root, register_thread_root, register_var_as_root, is_mmtk_initialized
+};
 
 /// Trait for objects that can be traced by the garbage collector.
 /// All heap-allocated types must implement this.
@@ -105,7 +112,7 @@ impl GcTrace for LispClosure {
     fn trace_children(&self, visitor: &mut dyn FnMut(&Var)) {
         // Trace the captured environment - it might contain heap references
         let captured_env_var = Var::from_u64(self.captured_env);
-        if crate::gc::var_needs_tracing(&captured_env_var) {
+        if var_needs_tracing(&captured_env_var) {
             visitor(&captured_env_var);
         }
     }
@@ -192,6 +199,7 @@ impl GcObjectRef {
     }
 }
 
+use crate::heap::{Environment, LispClosure, LispString, LispTuple};
 use std::sync::atomic::{AtomicPtr, Ordering};
 
 /// GC root set implementation using atomic pointers for thread safety.
@@ -346,7 +354,7 @@ mod tests {
             let string_var = Var::string("test");
             let list_var = Var::tuple(&[Var::int(1), Var::int(2)]);
             let env_values = [Var::int(42), string_var, list_var];
-            let env_ptr = crate::environment::Environment::from_values(&env_values, None);
+            let env_ptr = Environment::from_values(&env_values, None);
             let env_var = Var::environment(env_ptr);
 
             // Environment should trace its slot values
@@ -362,7 +370,7 @@ mod tests {
             }
 
             // Clean up
-            crate::environment::Environment::free(env_ptr);
+            Environment::free(env_ptr);
         }
     }
 
@@ -371,12 +379,11 @@ mod tests {
         unsafe {
             // Create parent and child environments
             let parent_values = [Var::string("parent"), Var::int(100)];
-            let parent_ptr = crate::environment::Environment::from_values(&parent_values, None);
+            let parent_ptr = Environment::from_values(&parent_values, None);
             let parent_var = Var::environment(parent_ptr);
 
             let child_values = [Var::string("child")];
-            let child_ptr =
-                crate::environment::Environment::from_values(&child_values, Some(parent_var));
+            let child_ptr = Environment::from_values(&child_values, Some(parent_var));
             let child_var = Var::environment(child_ptr);
 
             // Child environment should trace both parent and its own slots
@@ -394,8 +401,8 @@ mod tests {
             }
 
             // Clean up
-            crate::environment::Environment::free(child_ptr);
-            crate::environment::Environment::free(parent_ptr);
+            Environment::free(child_ptr);
+            Environment::free(parent_ptr);
         }
     }
 
@@ -406,13 +413,12 @@ mod tests {
             let parent_string = Var::string("parent_data");
             let parent_list = Var::tuple(&[Var::int(1), Var::string("nested")]);
             let parent_values = [parent_string, parent_list];
-            let parent_ptr = crate::environment::Environment::from_values(&parent_values, None);
+            let parent_ptr = Environment::from_values(&parent_values, None);
             let parent_var = Var::environment(parent_ptr);
 
             let child_string = Var::string("child_data");
             let child_values = [child_string, Var::int(200)];
-            let child_ptr =
-                crate::environment::Environment::from_values(&child_values, Some(parent_var));
+            let child_ptr = Environment::from_values(&child_values, Some(parent_var));
             let child_var = Var::environment(child_ptr);
 
             // Add environment to root set
@@ -437,8 +443,8 @@ mod tests {
             assert_eq!(marked_objects.len(), 6);
 
             // Clean up
-            crate::environment::Environment::free(child_ptr);
-            crate::environment::Environment::free(parent_ptr);
+            Environment::free(child_ptr);
+            Environment::free(parent_ptr);
         }
     }
 
@@ -446,20 +452,20 @@ mod tests {
     fn test_environment_size_calculation() {
         unsafe {
             let env_values = [Var::int(1), Var::int(2), Var::int(3)];
-            let env_ptr = crate::environment::Environment::from_values(&env_values, None);
+            let env_ptr = Environment::from_values(&env_values, None);
             let env_var = Var::environment(env_ptr);
 
             if let Some(obj_ref) = var_as_gc_object(&env_var) {
                 let size = obj_ref.size_bytes();
-                let expected_size = std::mem::size_of::<crate::environment::Environment>()
-                    + (3 * std::mem::size_of::<Var>());
+                let expected_size =
+                    std::mem::size_of::<Environment>() + (3 * std::mem::size_of::<Var>());
                 assert_eq!(size, expected_size);
 
                 assert_eq!(obj_ref.type_name(), "Environment");
             }
 
             // Clean up
-            crate::environment::Environment::free(env_ptr);
+            Environment::free(env_ptr);
         }
     }
 }

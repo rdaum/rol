@@ -17,12 +17,10 @@
 mod ast;
 mod bytecode;
 mod compiler;
-mod environment;
 mod gc;
 mod heap;
 mod jit;
 mod lexer;
-mod mmtk_binding;
 mod parser;
 mod protocol;
 mod repl;

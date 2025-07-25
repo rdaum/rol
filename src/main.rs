@@ -15,13 +15,11 @@ mod ast;
 mod bench;
 mod bytecode;
 mod compiler;
-mod environment;
 mod gc;
-mod heap;
 mod integration_tests;
 mod jit;
 mod lexer;
-mod mmtk_binding;
+mod heap;
 mod parser;
 mod protocol;
 mod repl;
@@ -37,13 +35,13 @@ fn main() {
     }
 
     // Initialize MMTk garbage collector
-    if let Err(err) = mmtk_binding::initialize_mmtk() {
+    if let Err(err) = gc::initialize_mmtk() {
         eprintln!("Failed to initialize MMTk: {err}");
         std::process::exit(1);
     }
 
     // Bind mutator for the main thread
-    if let Err(err) = mmtk_binding::mmtk_bind_mutator() {
+    if let Err(err) = gc::mmtk_bind_mutator() {
         eprintln!("Failed to bind mutator for main thread: {err}");
         std::process::exit(1);
     }

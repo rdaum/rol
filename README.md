@@ -1,6 +1,6 @@
 # "Ryan's Own Lisp"
 
-A lazy-jitted, garbage collected, dynaamically typed S-expr language, aka Lisp or Scheme-like language in the vague
+A lazy-jitted, garbage collected, dynamically typed S-expr language, aka Lisp or Scheme-like language in the vague
 style of Janet and maybe a sprinkle of Clojure.
 
 Is currently missing a pile of features still, but has Janet-like tuples (immutable lists),

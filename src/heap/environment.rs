@@ -14,8 +14,8 @@
 //! Environment system for lexical scoping in JIT-compiled functions.
 //! Uses offset-based addressing for efficient variable access.
 
+use crate::heap::flexible_utils::{alloc_with_trailing, free_with_trailing, trailing_ptr, trailing_slice};
 use crate::var::Var;
-use std::alloc::{Layout, alloc, dealloc};
 
 /// Lexical address for variables - avoids symbol lookup at runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,54 +42,39 @@ impl Environment {
     /// Create a new environment with the given number of slots.
     /// All slots are initialized to Var::none().
     pub fn new(slot_count: u32, parent: Option<Var>) -> *mut Environment {
-        let size = slot_count;
-
-        // Calculate total size: header + slot storage
-        let header_size = std::mem::size_of::<Environment>();
-        let slots_size = size as usize * std::mem::size_of::<Var>();
-        let total_size = header_size + slots_size;
-        let align = std::mem::align_of::<Environment>();
-
-        // Allocate memory
-        let layout = Layout::from_size_align(total_size, align).unwrap();
-        let ptr = unsafe { alloc(layout) as *mut Environment };
-
-        if ptr.is_null() {
-            panic!("Failed to allocate memory for Environment");
-        }
-
         unsafe {
-            // Initialize header
-            (*ptr).parent = parent.map_or(0, |p| p.as_u64());
-            (*ptr).size = size;
+            alloc_with_trailing(slot_count as usize, |ptr: *mut Environment, slots_ptr: *mut u64| {
+                // Initialize header
+                (*ptr).parent = parent.map_or(0, |p| p.as_u64());
+                (*ptr).size = slot_count;
 
-            // Initialize all slots to none
-            let slots_ptr = Self::slots_ptr(ptr);
-            for i in 0..size as usize {
-                *slots_ptr.add(i) = Var::none().as_u64();
-            }
+                // Initialize all slots to none
+                for i in 0..slot_count as usize {
+                    *slots_ptr.add(i) = Var::none().as_u64();
+                }
+            })
         }
-
-        ptr
     }
 
     /// Create an environment from a slice of initial values.
     pub fn from_values(values: &[Var], parent: Option<Var>) -> *mut Environment {
-        let ptr = Self::new(values.len() as u32, parent);
-
         unsafe {
-            let slots_ptr = Self::slots_ptr(ptr);
-            for (i, &value) in values.iter().enumerate() {
-                *slots_ptr.add(i) = value.as_u64();
-            }
-        }
+            alloc_with_trailing(values.len(), |ptr: *mut Environment, slots_ptr: *mut u64| {
+                // Initialize header
+                (*ptr).parent = parent.map_or(0, |p| p.as_u64());
+                (*ptr).size = values.len() as u32;
 
-        ptr
+                // Initialize slots with provided values
+                for (i, &value) in values.iter().enumerate() {
+                    *slots_ptr.add(i) = value.as_u64();
+                }
+            })
+        }
     }
 
     /// Get pointer to the slots array.
     unsafe fn slots_ptr(ptr: *mut Environment) -> *mut u64 {
-        unsafe { (ptr as *mut u8).add(std::mem::size_of::<Environment>()) as *mut u64 }
+        unsafe { trailing_ptr(ptr) }
     }
 
     /// Get a value from this environment's slots.
@@ -190,11 +175,7 @@ impl Environment {
 
     /// Get all values as a slice (for debugging/testing).
     pub unsafe fn as_slice(&self) -> &[Var] {
-        let slots_ptr = unsafe {
-            (self as *const Environment as *const u8).add(std::mem::size_of::<Environment>())
-                as *const Var
-        };
-        unsafe { std::slice::from_raw_parts(slots_ptr, self.size as usize) }
+        unsafe { trailing_slice(self as *const Environment, self.size as usize) }
     }
 
     /// Free the memory for this Environment.
@@ -202,16 +183,9 @@ impl Environment {
         if ptr.is_null() {
             return;
         }
-
-        let header_size = std::mem::size_of::<Environment>();
-        let slots_size = unsafe { (*ptr).size as usize * std::mem::size_of::<Var>() };
-        let total_size = header_size + slots_size;
-        let align = std::mem::align_of::<Environment>();
-
-        let layout = unsafe { Layout::from_size_align_unchecked(total_size, align) };
-        unsafe {
-            dealloc(ptr as *mut u8, layout);
-        }
+        
+        let element_count = unsafe { (*ptr).size as usize };
+        unsafe { free_with_trailing::<Environment, u64>(ptr, element_count) };
     }
 }
 

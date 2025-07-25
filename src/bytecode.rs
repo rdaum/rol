@@ -25,6 +25,8 @@ use cranelift::codegen::isa::CallConv;
 use cranelift::prelude::*;
 use cranelift_jit::JITModule;
 use cranelift_module::{Linkage, Module};
+use crate::gc::{jit_memory_write_barrier, jit_safepoint_check, jit_stack_write_barrier, WriteBarrierGuard};
+use crate::with_write_barrier;
 
 /// Macro to wrap builder.ins().store() calls with write barriers for GC safety
 ///
@@ -96,7 +98,7 @@ pub extern "C" fn jit_set_global(jit_ptr: *mut BytecodeJIT, symbol_id: u64, valu
 
         // Use RAII write barrier for global assignment
         // For globals, we don't have a specific containing object, so use null
-        let _guard = crate::mmtk_binding::WriteBarrierGuard::new(
+        let _guard = WriteBarrierGuard::new(
             std::ptr::null_mut(),
             std::ptr::null_mut(),
             old_var,
@@ -143,7 +145,7 @@ pub extern "C" fn jit_set_global_offset(jit_ptr: *mut BytecodeJIT, offset: u32, 
         let old_var = jit.get_global_offset(offset).unwrap_or(Var::none());
 
         // Use RAII write barrier for global offset assignment
-        let _guard = crate::mmtk_binding::WriteBarrierGuard::new(
+        let _guard = WriteBarrierGuard::new(
             std::ptr::null_mut(),
             std::ptr::null_mut(),
             old_var,
@@ -985,15 +987,15 @@ impl BytecodeJIT {
         // Register write barrier helpers for JIT-generated memory stores
         builder.symbol(
             "jit_stack_write_barrier",
-            crate::mmtk_binding::jit_stack_write_barrier as *const u8,
+            jit_stack_write_barrier as *const u8,
         );
         builder.symbol(
             "jit_memory_write_barrier",
-            crate::mmtk_binding::jit_memory_write_barrier as *const u8,
+            jit_memory_write_barrier as *const u8,
         );
         builder.symbol(
             "jit_safepoint_check",
-            crate::mmtk_binding::jit_safepoint_check as *const u8,
+            jit_safepoint_check as *const u8,
         );
 
         // Register fast call helpers using paste to generate the function names
@@ -1041,7 +1043,7 @@ impl BytecodeJIT {
         if let Some(existing_slot) = self.global_variables.get_mut(&symbol) {
             // Updating existing entry
             let slot_ptr = existing_slot as *mut Var;
-            crate::with_write_barrier!(
+            with_write_barrier!(
                 std::ptr::null_mut(),
                 slot_ptr,
                 old_value,
@@ -1055,7 +1057,7 @@ impl BytecodeJIT {
             // For new insertions, we should ideally call the write barrier on the newly inserted slot
             if let Some(new_slot) = self.global_variables.get_mut(&symbol) {
                 let slot_ptr = new_slot as *mut Var;
-                crate::with_write_barrier!(
+                with_write_barrier!(
                     std::ptr::null_mut(),
                     slot_ptr,
                     Var::none(),

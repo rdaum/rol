@@ -15,14 +15,14 @@
 //! Provides an interactive shell with readline support, history, and error handling.
 
 use crate::bytecode::{BytecodeCompiler, BytecodeJIT};
-use crate::environment::Environment;
-use crate::mmtk_binding::{
+use crate::gc::{
     clear_thread_roots, initialize_mmtk, mmtk_bind_mutator, register_var_as_root,
 };
 use crate::parser::parse_expr_string;
 use crate::var::Var;
 use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
+use crate::heap::Environment;
 
 /// REPL state that maintains the bytecode compiler and JIT
 pub struct Repl {

@@ -12,9 +12,7 @@
 //
 
 //! MMTk garbage collector binding for ROL runtime.
-//! Implements NoGC plan integration following MMTk tutorial.
 
-use crate::gc::{GcRootSet, SimpleRootSet};
 use mmtk::util::copy::{CopySemantics, GCWorkerCopyContext};
 use mmtk::util::opaque_pointer::*;
 use mmtk::util::options::PlanSelector;
@@ -24,6 +22,8 @@ use mmtk::*;
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use crate::gc::{var_as_gc_object, var_needs_tracing, GcObjectRef, GcRootSet, GcTrace, SimpleRootSet};
+use crate::heap::{Environment, LispClosure, LispString, LispTuple};
 
 /// Global MMTk instance - thread-safe lazy initialization
 static MMTK_INSTANCE: OnceLock<Box<MMTK<RolVM>>> = OnceLock::new();
@@ -48,7 +48,7 @@ static GLOBAL_ROOT_SET: OnceLock<Mutex<SimpleRootSet>> = OnceLock::new();
 /// Thread-local root set - simplified to a single instance for now
 static CURRENT_ROOT_SET: OnceLock<Mutex<SimpleRootSet>> = OnceLock::new();
 
-/// ROL VM binding - zero-sized struct as per NoGC tutorial
+/// ROL VM binding
 #[derive(Default)]
 pub struct RolVM;
 
@@ -63,7 +63,7 @@ impl VMBinding for RolVM {
     type VMMemorySlice = std::ops::Range<Address>;
 }
 
-/// ActivePlan implementation - proper mutator management for NoGC
+/// ActivePlan implementation
 impl ActivePlan<RolVM> for RolVM {
     fn number_of_mutators() -> usize {
         // Get count from atomic counter
@@ -94,8 +94,9 @@ impl ActivePlan<RolVM> for RolVM {
     }
 
     fn mutators<'a>() -> Box<dyn Iterator<Item = &'a mut Mutator<RolVM>> + 'a> {
-        // For NoGC, we don't need to iterate over mutators often
+        // For now, we don't need to iterate over mutators often
         // Return empty iterator as this is mainly used for GC coordination
+        // TODO: fill me in
         Box::new(std::iter::empty())
     }
 }
@@ -244,7 +245,7 @@ impl Scanning<RolVM> for RolVM {
         let var = var_from_address(obj_addr);
 
         unsafe {
-            if let Some(gc_obj) = crate::gc::var_as_gc_object(&var) {
+            if let Some(gc_obj) = var_as_gc_object(&var) {
                 // Log object being scanned
                 eprintln!(
                     "[GC] Scanning object at {:p} (type: {})",
@@ -253,7 +254,7 @@ impl Scanning<RolVM> for RolVM {
                 );
 
                 gc_obj.trace_children(&mut |child_var| {
-                    if crate::gc::var_needs_tracing(child_var) {
+                    if var_needs_tracing(child_var) {
                         let child_addr = address_from_var(child_var);
                         edge_visitor.visit_slot(child_addr);
                     }
@@ -290,7 +291,7 @@ impl Scanning<RolVM> for RolVM {
 
             // Then trace their children
             root_set.trace_roots(|var| {
-                if crate::gc::var_needs_tracing(var) {
+                if var_needs_tracing(var) {
                     let addr = address_from_var(var);
                     eprintln!(
                         "[GC] Found child from thread root at {:p}",
@@ -322,7 +323,7 @@ impl Scanning<RolVM> for RolVM {
 
             // Then trace their children
             root_set.trace_roots(|var| {
-                if crate::gc::var_needs_tracing(var) {
+                if var_needs_tracing(var) {
                     let addr = address_from_var(var);
                     eprintln!(
                         "[GC] Found child from global root at {:p}",
@@ -348,7 +349,7 @@ impl Scanning<RolVM> for RolVM {
     }
 }
 
-/// ReferenceGlue implementation - stubs for NoGC
+/// ReferenceGlue implementation - stubs for now
 impl ReferenceGlue<RolVM> for RolVM {
     type FinalizableType = ObjectReference;
 
@@ -552,7 +553,7 @@ pub fn mmtk_alloc_placeholder(size: usize) -> *mut u8 {
     unsafe { alloc(layout) }
 }
 
-/// Placeholder for MMTk deallocation - NoGC doesn't deallocate
+/// Placeholder for MMTk deallocation
 pub unsafe fn mmtk_dealloc_placeholder(ptr: *mut u8, size: usize) {
     use std::alloc::{Layout, dealloc};
 
@@ -563,7 +564,7 @@ pub unsafe fn mmtk_dealloc_placeholder(ptr: *mut u8, size: usize) {
 }
 
 /// Register a heap object as a global root (survives across function calls)
-pub fn register_global_root(ptr: *mut dyn crate::gc::GcTrace) {
+pub fn register_global_root(ptr: *mut dyn GcTrace) {
     if let Some(root_set_mutex) = get_global_root_set() {
         if let Ok(mut root_set) = root_set_mutex.lock() {
             eprintln!("[GC] Registering global root: {ptr:p}");
@@ -578,7 +579,7 @@ pub fn register_global_root(ptr: *mut dyn crate::gc::GcTrace) {
 }
 
 /// Register a heap object as a thread-local root (stack variable, local scope)  
-pub fn register_thread_root(ptr: *mut dyn crate::gc::GcTrace) {
+pub fn register_thread_root(ptr: *mut dyn GcTrace) {
     if let Some(root_set_mutex) = get_current_root_set() {
         if let Ok(mut root_set) = root_set_mutex.lock() {
             eprintln!("[GC] Registering thread root: {ptr:p}");
@@ -593,7 +594,7 @@ pub fn register_thread_root(ptr: *mut dyn crate::gc::GcTrace) {
 }
 
 /// Unregister a specific heap object from thread roots
-pub fn unregister_thread_root(ptr: *mut dyn crate::gc::GcTrace) {
+pub fn unregister_thread_root(ptr: *mut dyn GcTrace) {
     if let Some(root_set_mutex) = get_current_root_set() {
         if let Ok(mut root_set) = root_set_mutex.lock() {
             root_set.stack_roots.retain(|atomic_ptr| {
@@ -635,19 +636,19 @@ pub fn clear_thread_roots() {
 /// Helper: Register a heap object from a Var (extracts pointer and converts to trait object)
 pub fn register_var_as_root(var: crate::var::Var, is_global: bool) {
     unsafe {
-        if let Some(gc_obj) = crate::gc::var_as_gc_object(&var) {
-            let trait_ptr: *mut dyn crate::gc::GcTrace = match gc_obj {
-                crate::gc::GcObjectRef::String(ptr) => {
-                    ptr as *mut crate::heap::LispString as *mut dyn crate::gc::GcTrace
+        if let Some(gc_obj) = var_as_gc_object(&var) {
+            let trait_ptr: *mut dyn GcTrace = match gc_obj {
+                GcObjectRef::String(ptr) => {
+                    ptr as *mut LispString as *mut dyn GcTrace
                 }
-                crate::gc::GcObjectRef::Vector(ptr) => {
-                    ptr as *mut crate::heap::LispTuple as *mut dyn crate::gc::GcTrace
+                GcObjectRef::Vector(ptr) => {
+                    ptr as *mut LispTuple as *mut dyn GcTrace
                 }
-                crate::gc::GcObjectRef::Environment(ptr) => {
-                    ptr as *mut crate::environment::Environment as *mut dyn crate::gc::GcTrace
+                GcObjectRef::Environment(ptr) => {
+                    ptr as *mut Environment as *mut dyn GcTrace
                 }
-                crate::gc::GcObjectRef::Closure(ptr) => {
-                    ptr as *mut crate::heap::LispClosure as *mut dyn crate::gc::GcTrace
+                GcObjectRef::Closure(ptr) => {
+                    ptr as *mut LispClosure as *mut dyn GcTrace
                 }
             };
 
@@ -742,13 +743,13 @@ pub fn var_write_barrier(
     new_value: crate::var::Var,
 ) {
     // Pre-barrier with old value
-    if crate::gc::var_needs_tracing(&old_value) {
+    if var_needs_tracing(&old_value) {
         let _old_ptr = address_from_var(&old_value).to_ptr::<u8>() as *mut u8;
         write_barrier_pre(containing_object, slot_addr as *mut u8);
     }
 
     // Post-barrier with new value
-    if crate::gc::var_needs_tracing(&new_value) {
+    if var_needs_tracing(&new_value) {
         let new_ptr = address_from_var(&new_value).to_ptr::<u8>() as *mut u8;
         write_barrier_post(containing_object, slot_addr as *mut u8, new_ptr);
     }
@@ -771,7 +772,7 @@ impl WriteBarrierGuard {
         new_value: crate::var::Var,
     ) -> Self {
         // Execute pre-barrier
-        if crate::gc::var_needs_tracing(&old_value) {
+        if var_needs_tracing(&old_value) {
             write_barrier_pre(containing_object, slot_addr as *mut u8);
         }
 
@@ -802,7 +803,7 @@ impl WriteBarrierGuard {
 impl Drop for WriteBarrierGuard {
     fn drop(&mut self) {
         // Execute post-barrier
-        if crate::gc::var_needs_tracing(&self.new_value) {
+        if var_needs_tracing(&self.new_value) {
             let new_ptr = address_from_var(&self.new_value).to_ptr::<u8>() as *mut u8;
             write_barrier_post(self.containing_object, self.slot_addr, new_ptr);
         }
@@ -828,7 +829,7 @@ impl Drop for RawWriteBarrierGuard {
 #[macro_export]
 macro_rules! with_write_barrier {
     ($object:expr, $slot:expr, $old:expr, $new:expr => $code:block) => {{
-        let _guard = $crate::mmtk_binding::WriteBarrierGuard::new($object, $slot, $old, $new);
+        let _guard = $crate::gc::WriteBarrierGuard::new($object, $slot, $old, $new);
         $code
     }};
 }
@@ -838,7 +839,7 @@ macro_rules! with_write_barrier {
 #[macro_export]
 macro_rules! with_raw_write_barrier {
     ($object:expr, $slot:expr, $target:expr => $code:block) => {{
-        let _guard = $crate::mmtk_binding::WriteBarrierGuard::new_raw($object, $slot, $target);
+        let _guard = $crate::gc::WriteBarrierGuard::new_raw($object, $slot, $target);
         $code
     }};
 }
@@ -858,7 +859,7 @@ pub extern "C" fn jit_env_write_barrier(
             if offset < (*env_ptr).size {
                 // Calculate slot address
                 let slots_ptr = (env_ptr as *mut u8)
-                    .add(std::mem::size_of::<crate::environment::Environment>())
+                    .add(std::mem::size_of::<Environment>())
                     as *mut crate::var::Var;
                 let slot_addr = slots_ptr.add(offset as usize);
 

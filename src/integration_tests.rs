@@ -15,7 +15,7 @@
 //! Tests: source code -> lexer -> parser -> compiler -> execution
 
 use crate::compiler::Compiler;
-use crate::environment::Environment;
+use crate::heap::Environment;
 use crate::parser::parse_expr_string;
 use crate::var::Var;
 

@@ -15,7 +15,6 @@
 //! Converts Lisp expressions to JIT-compiled machine code.
 
 use crate::ast::{BuiltinOp, Expr};
-use crate::environment::LexicalAddress;
 use crate::jit::VarBuilder;
 use crate::symbol::Symbol;
 
@@ -24,6 +23,7 @@ use cranelift::prelude::*;
 use cranelift_jit::JITModule;
 use cranelift_module::{FuncId, Linkage, Module};
 use std::collections::HashMap;
+use crate::heap::{env_create, env_get, env_set, LexicalAddress};
 
 /// Compilation context that tracks variables and their lexical addresses
 #[derive(Debug, Clone)]
@@ -92,9 +92,9 @@ impl Compiler {
             cranelift_jit::JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
 
         // Add symbols for our environment functions
-        builder.symbol("env_get", crate::environment::env_get as *const u8);
-        builder.symbol("env_create", crate::environment::env_create as *const u8);
-        builder.symbol("env_set", crate::environment::env_set as *const u8);
+        builder.symbol("env_get", env_get as *const u8);
+        builder.symbol("env_create", env_create as *const u8);
+        builder.symbol("env_set", env_set as *const u8);
 
         let mut module = JITModule::new(builder);
         let var_builder = VarBuilder::new();
@@ -1045,7 +1045,7 @@ fn compile_lambda_body_recursive(
 mod tests {
     use super::*;
     use crate::ast::Expr;
-    use crate::environment::Environment;
+    use crate::heap::Environment;
     use crate::parser::parse_expr_string;
     use crate::var::Var;
 
@@ -1308,7 +1308,6 @@ mod tests {
         let func: fn(u64) -> u64 = unsafe { std::mem::transmute(func_ptr) };
 
         // Create an empty environment to pass in
-        use crate::environment::Environment;
         let empty_env_ptr = Environment::from_values(&[], None);
         let empty_env = Var::environment(empty_env_ptr).as_u64();
         let result_bits = func(empty_env);
@@ -1343,7 +1342,6 @@ mod tests {
         let func_ptr = compiler.compile_expr(&outer_let).unwrap();
         let func: fn(u64) -> u64 = unsafe { std::mem::transmute(func_ptr) };
 
-        use crate::environment::Environment;
         let empty_env_ptr = Environment::from_values(&[], None);
         let empty_env = Var::environment(empty_env_ptr).as_u64();
         let result_bits = func(empty_env);
@@ -1388,7 +1386,6 @@ mod tests {
         let func_ptr = compiler.compile_expr(&expr).unwrap();
         let func: fn(u64) -> u64 = unsafe { std::mem::transmute(func_ptr) };
 
-        use crate::environment::Environment;
         let empty_env_ptr = Environment::from_values(&[], None);
         let empty_env = Var::environment(empty_env_ptr).as_u64();
         let result_bits = func(empty_env);
