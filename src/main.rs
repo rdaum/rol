@@ -11,18 +11,9 @@
 // this program. If not, see <https://www.gnu.org/licenses/>.
 //
 
-mod ast;
-mod bench;
-mod bytecode;
-mod gc;
-mod jit;
-mod lexer;
-mod heap;
-mod parser;
-mod protocol;
+use rol::{initialize_mmtk, mmtk_bind_mutator};
+
 mod repl;
-mod symbol;
-mod var;
 
 fn main() {
     // Set up logging to suppress verbose Cranelift output
@@ -33,13 +24,13 @@ fn main() {
     }
 
     // Initialize MMTk garbage collector
-    if let Err(err) = gc::initialize_mmtk() {
+    if let Err(err) = initialize_mmtk() {
         eprintln!("Failed to initialize MMTk: {err}");
         std::process::exit(1);
     }
 
     // Bind mutator for the main thread
-    if let Err(err) = gc::mmtk_bind_mutator() {
+    if let Err(err) = mmtk_bind_mutator() {
         eprintln!("Failed to bind mutator for main thread: {err}");
         std::process::exit(1);
     }

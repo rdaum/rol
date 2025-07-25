@@ -14,15 +14,15 @@
 //! Read-Eval-Print Loop for the Lisp interpreter.
 //! Provides an interactive shell with readline support, history, and error handling.
 
-use crate::bytecode::{BytecodeCompiler, BytecodeJIT};
-use crate::gc::{
-    clear_thread_roots, initialize_mmtk, mmtk_bind_mutator, register_var_as_root,
+use rol::bytecode::{BytecodeCompiler, BytecodeJIT};
+use rol::gc::{
+    clear_thread_roots, register_var_as_root,
 };
-use crate::parser::parse_expr_string;
-use crate::var::Var;
+use rol::parser::parse_expr_string;
+use rol::var::{Var, VarType};
 use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
-use crate::heap::Environment;
+use rol::heap::Environment;
 
 /// REPL state that maintains the bytecode compiler and JIT
 pub struct Repl {
@@ -35,15 +35,6 @@ pub struct Repl {
 impl Repl {
     /// Create a new REPL instance
     pub fn new() -> std::result::Result<Self, ReadlineError> {
-        // Initialize MMTk garbage collector
-        if let Err(e) = initialize_mmtk() {
-            eprintln!("Warning: Failed to initialize MMTk GC: {e}");
-        }
-
-        // Bind mutator for this thread
-        if let Err(e) = mmtk_bind_mutator() {
-            eprintln!("Warning: Failed to bind MMTk mutator: {e}");
-        }
 
         let bytecode_compiler = BytecodeCompiler::new();
         let jit = BytecodeJIT::new();
@@ -105,28 +96,28 @@ impl Repl {
     /// Format a Var for display in the REPL
     pub fn format_result(&self, var: &Var) -> String {
         match var.get_type() {
-            crate::var::VarType::I32 => {
+            VarType::I32 => {
                 if let Some(n) = var.as_int() {
                     format!("{n}")
                 } else {
                     format!("{var:?}")
                 }
             }
-            crate::var::VarType::F64 => {
+            VarType::F64 => {
                 if let Some(n) = var.as_double() {
                     format!("{n}")
                 } else {
                     format!("{var:?}")
                 }
             }
-            crate::var::VarType::String => {
+            VarType::String => {
                 if let Some(s) = var.as_string() {
                     format!("\"{s}\"")
                 } else {
                     format!("{var:?}")
                 }
             }
-            crate::var::VarType::Bool => {
+            VarType::Bool => {
                 if let Some(b) = var.as_bool() {
                     if b {
                         "true".to_string()
@@ -137,17 +128,17 @@ impl Repl {
                     format!("{var:?}")
                 }
             }
-            crate::var::VarType::Tuple => {
+            VarType::Tuple => {
                 // TODO: Format lists nicely
                 format!("{var:?}")
             }
-            crate::var::VarType::Environment => "#<environment>".to_string(),
-            crate::var::VarType::Symbol => {
+            VarType::Environment => "#<environment>".to_string(),
+            VarType::Symbol => {
                 format!("{var:?}")
             }
-            crate::var::VarType::None => "nil".to_string(),
-            crate::var::VarType::Pointer => "#<pointer>".to_string(),
-            crate::var::VarType::Closure => {
+            VarType::None => "nil".to_string(),
+            VarType::Pointer => "#<pointer>".to_string(),
+            VarType::Closure => {
                 if let Some(closure_ptr) = var.as_closure() {
                     unsafe { format!("#<closure:{}>", (*closure_ptr).arity) }
                 } else {
