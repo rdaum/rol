@@ -153,7 +153,7 @@ static GLOBAL_INTERNER: Lazy<GlobalInternerState> = Lazy::new(GlobalInternerStat
 /// # Examples
 ///
 /// ```
-/// use conat::symbol::Symbol;
+/// use rol::symbol::Symbol;
 ///
 /// let sym1 = Symbol::mk("hello");
 /// let sym2 = Symbol::mk("hello");

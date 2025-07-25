@@ -330,6 +330,7 @@ mod tests {
 
     #[test]
     fn test_environment_creation() {
+        crate::gc::ensure_mmtk_initialized_for_tests();
         unsafe {
             let env = Environment::new(3, None);
             assert_eq!((*env).size, 3);
@@ -340,12 +341,13 @@ mod tests {
             assert_eq!((*env).get(1), Var::none());
             assert_eq!((*env).get(2), Var::none());
 
-            Environment::free(env);
+            // mmtk handles cleanup automatically
         }
     }
 
     #[test]
     fn test_environment_from_values() {
+        crate::gc::ensure_mmtk_initialized_for_tests();
         let values = [Var::int(42), Var::bool(true), Var::string("hello")];
 
         unsafe {
@@ -356,12 +358,13 @@ mod tests {
             assert_eq!((*env).get(1), Var::bool(true));
             assert_eq!((*env).get(2).as_string(), Some("hello"));
 
-            Environment::free(env);
+            // mmtk handles cleanup automatically
         }
     }
 
     #[test]
     fn test_environment_get_set() {
+        crate::gc::ensure_mmtk_initialized_for_tests();
         unsafe {
             let env = Environment::new(2, None);
 
@@ -373,12 +376,13 @@ mod tests {
             assert_eq!((*env).get(0), Var::int(100));
             assert_eq!((*env).get(1), Var::bool(false));
 
-            Environment::free(env);
+            // mmtk handles cleanup automatically
         }
     }
 
     #[test]
     fn test_environment_parent_chain() {
+        crate::gc::ensure_mmtk_initialized_for_tests();
         unsafe {
             // Create parent environment
             let parent_values = [Var::int(1), Var::int(2)];
@@ -395,13 +399,13 @@ mod tests {
             assert_eq!((*retrieved_parent).get(0), Var::int(1));
             assert_eq!((*retrieved_parent).get(1), Var::int(2));
 
-            Environment::free(child);
-            Environment::free(parent);
+            // mmtk handles cleanup automatically
         }
     }
 
     #[test]
     fn test_lexical_addressing() {
+        crate::gc::ensure_mmtk_initialized_for_tests();
         unsafe {
             // Create nested environments:
             // parent: [100, 200]
@@ -445,13 +449,13 @@ mod tests {
             };
             assert_eq!((*child).resolve(addr), None);
 
-            Environment::free(child);
-            Environment::free(parent);
+            // mmtk handles cleanup automatically
         }
     }
 
     #[test]
     fn test_lexical_assignment() {
+        crate::gc::ensure_mmtk_initialized_for_tests();
         unsafe {
             let parent = Environment::from_values(&[Var::int(100), Var::int(200)], None);
             let parent_var = Var::environment(parent);
@@ -474,13 +478,13 @@ mod tests {
             assert!((*child).assign(addr, Var::int(888)));
             assert_eq!((*parent).get(1), Var::int(888));
 
-            Environment::free(child);
-            Environment::free(parent);
+            // mmtk handles cleanup automatically
         }
     }
 
     #[test]
     fn test_var_environment_integration() {
+        crate::gc::ensure_mmtk_initialized_for_tests();
         unsafe {
             // Test that Environment integrates properly with Var system
             let values = [Var::int(42), Var::string("test"), Var::bool(true)];
@@ -515,12 +519,13 @@ mod tests {
             let display_str = format!("{env_var}");
             assert!(display_str.contains("env(size=3)"));
 
-            Environment::free(env);
+            // mmtk handles cleanup automatically
         }
     }
 
     #[test]
     fn test_jit_helper_env_create() {
+        crate::gc::ensure_mmtk_initialized_for_tests();
         unsafe {
             // Test creating environment without parent
             let env_bits = env_create(3, 0);
@@ -530,7 +535,7 @@ mod tests {
             if let Some(env_ptr) = env_var.as_environment() {
                 assert_eq!((*env_ptr).size, 3);
                 assert_eq!((*env_ptr).parent, 0);
-                Environment::free(env_ptr);
+                // mmtk handles cleanup automatically
             }
 
             // Test creating environment with parent
@@ -544,15 +549,16 @@ mod tests {
 
                 // Clean up
                 if let Some(parent_ptr) = (*child_ptr).parent().unwrap().as_environment() {
-                    Environment::free(parent_ptr);
+                    // mmtk handles cleanup automatically
                 }
-                Environment::free(child_ptr);
+                // mmtk handles cleanup automatically
             }
         }
     }
 
     #[test]
     fn test_jit_helper_local_access() {
+        crate::gc::ensure_mmtk_initialized_for_tests();
         unsafe {
             let env_bits = env_create(2, 0);
 
@@ -573,13 +579,14 @@ mod tests {
             // Clean up
             let env_var = Var::from_u64(env_bits);
             if let Some(env_ptr) = env_var.as_environment() {
-                Environment::free(env_ptr);
+                // mmtk handles cleanup automatically
             }
         }
     }
 
     #[test]
     fn test_jit_helper_lexical_access() {
+        crate::gc::ensure_mmtk_initialized_for_tests();
         unsafe {
             // Create parent environment
             let parent_bits = env_create(2, 0);
@@ -617,16 +624,17 @@ mod tests {
             let child_var = Var::from_u64(child_bits);
             let parent_var = Var::from_u64(parent_bits);
             if let Some(child_ptr) = child_var.as_environment() {
-                Environment::free(child_ptr);
+                // mmtk handles cleanup automatically
             }
             if let Some(parent_ptr) = parent_var.as_environment() {
-                Environment::free(parent_ptr);
+                // mmtk handles cleanup automatically
             }
         }
     }
 
     #[test]
     fn test_jit_helper_utilities() {
+        crate::gc::ensure_mmtk_initialized_for_tests();
         unsafe {
             let env_bits = env_create(5, 0);
 
@@ -649,10 +657,10 @@ mod tests {
             let env_var = Var::from_u64(env_bits);
             let child_var = Var::from_u64(child_bits);
             if let Some(env_ptr) = env_var.as_environment() {
-                Environment::free(env_ptr);
+                // mmtk handles cleanup automatically
             }
             if let Some(child_ptr) = child_var.as_environment() {
-                Environment::free(child_ptr);
+                // mmtk handles cleanup automatically
             }
         }
     }

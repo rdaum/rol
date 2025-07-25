@@ -28,8 +28,6 @@ pub enum ParseError {
     UnexpectedEof { expected: String },
     /// Invalid special form syntax
     InvalidSpecialForm { form: String, reason: String },
-    /// Generic parse error
-    Generic(String),
 }
 
 impl std::fmt::Display for ParseError {
@@ -44,7 +42,6 @@ impl std::fmt::Display for ParseError {
             ParseError::InvalidSpecialForm { form, reason } => {
                 write!(f, "Invalid {form} form: {reason}")
             }
-            ParseError::Generic(msg) => write!(f, "{msg}"),
         }
     }
 }
