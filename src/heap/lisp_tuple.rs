@@ -13,10 +13,12 @@
 
 //! Native vector/tuple type optimized for JIT access and MMTk garbage collection.
 
+use crate::heap::flexible_utils::{
+    alloc_with_trailing, free_with_trailing, trailing_ptr, trailing_slice, trailing_slice_mut,
+};
 use crate::var::Var;
-use std::ptr;
-use crate::heap::flexible_utils::{alloc_with_trailing, free_with_trailing, trailing_ptr, trailing_slice, trailing_slice_mut};
 use crate::with_write_barrier;
+use std::ptr;
 
 /// Native vector type optimized for JIT access.
 /// Layout: [length: u64][capacity: u64][elements: Var...]
@@ -36,15 +38,18 @@ impl LispTuple {
         let capacity = capacity as u64;
 
         unsafe {
-            alloc_with_trailing(capacity as usize, |ptr: *mut LispTuple, data_ptr: *mut Var| {
-                // Initialize header
-                (*ptr).length = 0;
-                (*ptr).capacity = capacity;
+            alloc_with_trailing(
+                capacity as usize,
+                |ptr: *mut LispTuple, data_ptr: *mut Var| {
+                    // Initialize header
+                    (*ptr).length = 0;
+                    (*ptr).capacity = capacity;
 
-                // Zero out element storage
-                let elements_size = capacity as usize * std::mem::size_of::<Var>();
-                ptr::write_bytes(data_ptr as *mut u8, 0, elements_size);
-            })
+                    // Zero out element storage
+                    let elements_size = capacity as usize * std::mem::size_of::<Var>();
+                    ptr::write_bytes(data_ptr as *mut u8, 0, elements_size);
+                },
+            )
         }
     }
 

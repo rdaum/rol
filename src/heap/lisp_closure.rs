@@ -13,7 +13,9 @@
 
 //! Native closure type for JIT-compiled functions with captured environments.
 
-use crate::gc::{is_mmtk_initialized, mmtk_alloc, mmtk_alloc_placeholder, mmtk_dealloc_placeholder};
+use crate::gc::{
+    is_mmtk_initialized, mmtk_alloc, mmtk_alloc_placeholder, mmtk_dealloc_placeholder,
+};
 use crate::var::Var;
 
 /// Native closure type for JIT-compiled functions.

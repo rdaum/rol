@@ -1,5 +1,5 @@
 //! Rol programming language implementation
-//! 
+//!
 //! A dynamic functional programming language with garbage collection,
 //! bytecode compilation, and JIT compilation.
 

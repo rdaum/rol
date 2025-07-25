@@ -13,6 +13,10 @@
 
 //! MMTk garbage collector binding for ROL runtime.
 
+use crate::gc::{
+    GcObjectRef, GcRootSet, GcTrace, SimpleRootSet, var_as_gc_object, var_needs_tracing,
+};
+use crate::heap::{Environment, LispClosure, LispString, LispTuple};
 use mmtk::util::copy::{CopySemantics, GCWorkerCopyContext};
 use mmtk::util::opaque_pointer::*;
 use mmtk::util::options::PlanSelector;
@@ -22,8 +26,6 @@ use mmtk::*;
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
-use crate::gc::{var_as_gc_object, var_needs_tracing, GcObjectRef, GcRootSet, GcTrace, SimpleRootSet};
-use crate::heap::{Environment, LispClosure, LispString, LispTuple};
 
 /// Global MMTk instance - thread-safe lazy initialization
 static MMTK_INSTANCE: OnceLock<Box<MMTK<RolVM>>> = OnceLock::new();
@@ -133,7 +135,7 @@ impl Collection<RolVM> for RolVM {
         }
     }
 
-    fn spawn_gc_thread(_tls: VMThread, ctx: GCThreadContext<RolVM>) {
+    fn spawn_gc_thread(_tls: VMThread, _ctx: GCThreadContext<RolVM>) {
         // Start GC - signal that GC is in progress
         let gc_sync = GC_SYNC.get().expect("GC sync not initialized");
         let (lock, _condvar) = &**gc_sync;
@@ -285,7 +287,7 @@ impl Scanning<RolVM> for RolVM {
                 let root_ptr_ptr = atomic_root.load(std::sync::atomic::Ordering::Acquire);
                 if !root_ptr_ptr.is_null() {
                     let root_ptr = unsafe { *root_ptr_ptr };
-                    let addr = unsafe { Address::from_ptr(root_ptr as *const u8) };
+                    let addr = Address::from_ptr(root_ptr as *const u8);
                     eprintln!("[GC] Found thread root object at {root_ptr:p}");
                     factory.create_process_roots_work(vec![addr]);
                 }
@@ -317,7 +319,7 @@ impl Scanning<RolVM> for RolVM {
                 let root_ptr_ptr = atomic_root.load(std::sync::atomic::Ordering::Acquire);
                 if !root_ptr_ptr.is_null() {
                     let root_ptr = unsafe { *root_ptr_ptr };
-                    let addr = unsafe { Address::from_ptr(root_ptr as *const u8) };
+                    let addr = Address::from_ptr(root_ptr as *const u8);
                     eprintln!("[GC] Found global root object at {root_ptr:p}");
                     factory.create_process_roots_work(vec![addr]);
                 }
@@ -414,13 +416,11 @@ fn address_from_var(var: &crate::var::Var) -> Address {
 pub fn initialize_mmtk() -> Result<(), &'static str> {
     // Use Once to ensure initialization happens exactly once per process
     static mut INIT_RESULT: Option<Result<(), &'static str>> = None;
-    
-    MMTK_INIT_ONCE.call_once(|| {
-        unsafe {
-            INIT_RESULT = Some(initialize_mmtk_internal());
-        }
+
+    MMTK_INIT_ONCE.call_once(|| unsafe {
+        INIT_RESULT = Some(initialize_mmtk_internal());
     });
-    
+
     unsafe { INIT_RESULT.unwrap() }
 }
 
@@ -665,18 +665,10 @@ pub fn register_var_as_root(var: crate::var::Var, is_global: bool) {
     unsafe {
         if let Some(gc_obj) = var_as_gc_object(&var) {
             let trait_ptr: *mut dyn GcTrace = match gc_obj {
-                GcObjectRef::String(ptr) => {
-                    ptr as *mut LispString as *mut dyn GcTrace
-                }
-                GcObjectRef::Vector(ptr) => {
-                    ptr as *mut LispTuple as *mut dyn GcTrace
-                }
-                GcObjectRef::Environment(ptr) => {
-                    ptr as *mut Environment as *mut dyn GcTrace
-                }
-                GcObjectRef::Closure(ptr) => {
-                    ptr as *mut LispClosure as *mut dyn GcTrace
-                }
+                GcObjectRef::String(ptr) => ptr as *mut LispString as *mut dyn GcTrace,
+                GcObjectRef::Vector(ptr) => ptr as *mut LispTuple as *mut dyn GcTrace,
+                GcObjectRef::Environment(ptr) => ptr as *mut Environment as *mut dyn GcTrace,
+                GcObjectRef::Closure(ptr) => ptr as *mut LispClosure as *mut dyn GcTrace,
             };
 
             if is_global {
@@ -700,11 +692,9 @@ pub fn write_barrier_pre(object: *mut u8, slot: *mut u8) {
         return;
     }
 
-    let obj_ref = unsafe {
-        ObjectReference::from_raw_address(Address::from_ptr(object))
-            .expect("Invalid object reference")
-    };
-    let slot_addr = unsafe { Address::from_ptr(slot) };
+    let obj_ref = ObjectReference::from_raw_address(Address::from_ptr(object))
+        .expect("Invalid object reference");
+    let slot_addr = Address::from_ptr(slot);
 
     THREAD_MUTATOR.with(|mutator_cell| {
         let mut mutator_ref = mutator_cell.borrow_mut();
@@ -733,18 +723,14 @@ pub fn write_barrier_post(object: *mut u8, slot: *mut u8, target: *mut u8) {
         return;
     }
 
-    let obj_ref = unsafe {
-        ObjectReference::from_raw_address(Address::from_ptr(object))
-            .expect("Invalid object reference")
-    };
-    let slot_addr = unsafe { Address::from_ptr(slot) };
+    let obj_ref = ObjectReference::from_raw_address(Address::from_ptr(object))
+        .expect("Invalid object reference");
+    let slot_addr = Address::from_ptr(slot);
     let target_ref = if target.is_null() {
-        unsafe { ObjectReference::from_raw_address(Address::ZERO).expect("Invalid null reference") }
+        ObjectReference::from_raw_address(Address::ZERO).expect("Invalid null reference")
     } else {
-        unsafe {
-            ObjectReference::from_raw_address(Address::from_ptr(target))
-                .expect("Invalid target reference")
-        }
+        ObjectReference::from_raw_address(Address::from_ptr(target))
+            .expect("Invalid target reference")
     };
 
     THREAD_MUTATOR.with(|mutator_cell| {
@@ -885,8 +871,7 @@ pub extern "C" fn jit_env_write_barrier(
         unsafe {
             if offset < (*env_ptr).size {
                 // Calculate slot address
-                let slots_ptr = (env_ptr as *mut u8)
-                    .add(std::mem::size_of::<Environment>())
+                let slots_ptr = (env_ptr as *mut u8).add(std::mem::size_of::<Environment>())
                     as *mut crate::var::Var;
                 let slot_addr = slots_ptr.add(offset as usize);
 

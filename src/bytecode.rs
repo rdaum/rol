@@ -19,14 +19,16 @@ use crate::jit::VarBuilder;
 use crate::symbol::Symbol;
 use crate::var::Var;
 
+use crate::gc::{
+    WriteBarrierGuard, jit_memory_write_barrier, jit_safepoint_check, jit_stack_write_barrier,
+};
+use crate::with_write_barrier;
 use cranelift::codegen::ir::FuncRef;
 use cranelift::codegen::ir::StackSlot;
 use cranelift::codegen::isa::CallConv;
 use cranelift::prelude::*;
 use cranelift_jit::JITModule;
 use cranelift_module::{Linkage, Module};
-use crate::gc::{jit_memory_write_barrier, jit_safepoint_check, jit_stack_write_barrier, WriteBarrierGuard};
-use crate::with_write_barrier;
 
 /// Macro to wrap builder.ins().store() calls with write barriers for GC safety
 ///
@@ -98,12 +100,8 @@ pub extern "C" fn jit_set_global(jit_ptr: *mut BytecodeJIT, symbol_id: u64, valu
 
         // Use RAII write barrier for global assignment
         // For globals, we don't have a specific containing object, so use null
-        let _guard = WriteBarrierGuard::new(
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            old_var,
-            new_var,
-        );
+        let _guard =
+            WriteBarrierGuard::new(std::ptr::null_mut(), std::ptr::null_mut(), old_var, new_var);
 
         jit.set_global(symbol, new_var);
     }
@@ -145,12 +143,8 @@ pub extern "C" fn jit_set_global_offset(jit_ptr: *mut BytecodeJIT, offset: u32, 
         let old_var = jit.get_global_offset(offset).unwrap_or(Var::none());
 
         // Use RAII write barrier for global offset assignment
-        let _guard = WriteBarrierGuard::new(
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            old_var,
-            new_var,
-        );
+        let _guard =
+            WriteBarrierGuard::new(std::ptr::null_mut(), std::ptr::null_mut(), old_var, new_var);
 
         jit.set_global_offset(offset, new_var);
     }
@@ -993,10 +987,7 @@ impl BytecodeJIT {
             "jit_memory_write_barrier",
             jit_memory_write_barrier as *const u8,
         );
-        builder.symbol(
-            "jit_safepoint_check",
-            jit_safepoint_check as *const u8,
-        );
+        builder.symbol("jit_safepoint_check", jit_safepoint_check as *const u8);
 
         // Register fast call helpers using paste to generate the function names
         paste::paste! {

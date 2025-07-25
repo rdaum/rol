@@ -13,9 +13,9 @@
 
 //! Native string type optimized for JIT access and MMTk garbage collection.
 
+use crate::heap::flexible_utils::{alloc_with_trailing, free_with_trailing, trailing_slice};
 use std::ptr;
 use std::str;
-use crate::heap::flexible_utils::{alloc_with_trailing, free_with_trailing, trailing_slice};
 
 /// Native string type optimized for JIT access.
 /// Layout: [length: u64][bytes: u8...]

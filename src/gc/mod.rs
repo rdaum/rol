@@ -19,14 +19,15 @@ use crate::var::Var;
 mod mmtk_binding;
 
 pub use mmtk_binding::{
-    WriteBarrierGuard, clear_thread_roots, initialize_mmtk, jit_global_write_barrier,
-    jit_heap_write_barrier, jit_memory_write_barrier, jit_safepoint_check, jit_stack_write_barrier,
-    mmtk_alloc, mmtk_alloc_placeholder, mmtk_bind_mutator, mmtk_dealloc_placeholder,
-    register_global_root, register_thread_root, register_var_as_root, is_mmtk_initialized,
+    WriteBarrierGuard, clear_thread_roots, initialize_mmtk, is_mmtk_initialized,
+    jit_global_write_barrier, jit_heap_write_barrier, jit_memory_write_barrier,
+    jit_safepoint_check, jit_stack_write_barrier, mmtk_alloc, mmtk_alloc_placeholder,
+    mmtk_bind_mutator, mmtk_dealloc_placeholder, register_global_root, register_thread_root,
+    register_var_as_root,
 };
 
 #[cfg(test)]
-pub use mmtk_binding::{ensure_mmtk_initialized_for_tests};
+pub use mmtk_binding::ensure_mmtk_initialized_for_tests;
 
 /// Trait for objects that can be traced by the garbage collector.
 /// All heap-allocated types must implement this.
@@ -334,7 +335,6 @@ mod tests {
         // Create nested structure: list containing another list and string
         let inner_list = Var::tuple(&[Var::int(1), Var::int(2)]);
         let string = Var::string("test");
-        let outer_list = Var::tuple(&[inner_list, string, Var::none()]);
 
         // Should trace all nested heap objects
         let root_set = SimpleRootSet {
@@ -429,7 +429,6 @@ mod tests {
             let child_string = Var::string("child_data");
             let child_values = [child_string, Var::int(200)];
             let child_ptr = Environment::from_values(&child_values, Some(parent_var));
-            let child_var = Var::environment(child_ptr);
 
             // Add environment to root set
             let root_set = SimpleRootSet {

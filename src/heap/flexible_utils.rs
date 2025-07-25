@@ -1,7 +1,9 @@
 //! Utilities for flexible array member patterns to reduce boilerplate.
 
+use crate::gc::{
+    is_mmtk_initialized, mmtk_alloc, mmtk_alloc_placeholder, mmtk_dealloc_placeholder,
+};
 use std::mem;
-use crate::gc::{is_mmtk_initialized, mmtk_alloc, mmtk_alloc_placeholder, mmtk_dealloc_placeholder};
 
 /// Helper for allocating structs with trailing flexible array members using MMTk.
 /// Returns a pointer to the allocated struct with trailing elements.

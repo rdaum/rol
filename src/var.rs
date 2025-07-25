@@ -22,14 +22,14 @@
 //! TODO: Will not work on BigEndian platforms
 //! Based on https://github.com/zuiderkwast/Var/blob/master/Var.h
 
+use crate::gc::{is_mmtk_initialized, register_var_as_root};
+use crate::heap::{Environment, LispClosure, LispString, LispTuple};
 use crate::protocol::{TypeProtocol, get_protocol};
 use crate::symbol::Symbol;
 use std::cmp::Ordering;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::ops::{Add, Div, Mul, Rem, Sub};
-use crate::gc::{is_mmtk_initialized, register_var_as_root};
-use crate::heap::{Environment, LispClosure, LispString, LispTuple};
 
 pub const BOOLEAN_FALSE: u64 = 0x00; // Perfect for truth tables!
 pub const BOOLEAN_TRUE: u64 = 0x01;
@@ -304,7 +304,7 @@ impl Var {
         (v & 0x03) == 0 && v >= MIN_POINTER && (v & POINTER_TAG_MASK) == CLOSURE_POINTER_TAG
     }
 
-    unsafe fn as_pointer<T>(&self) -> Option<*const T> {
+    pub unsafe fn as_pointer<T>(&self) -> Option<*const T> {
         if self.is_pointer() {
             // For generic pointers, no masking needed since they have no tag bits
             Some(unsafe { self.0.ptr as *const T })
@@ -313,7 +313,7 @@ impl Var {
         }
     }
 
-    unsafe fn as_pointer_mut<T>(&self) -> Option<*mut T> {
+    pub unsafe fn as_pointer_mut<T>(&self) -> Option<*mut T> {
         if self.is_pointer() {
             // For generic pointers, no masking needed since they have no tag bits
             Some(unsafe { self.0.ptr as *mut T })
@@ -322,7 +322,7 @@ impl Var {
         }
     }
 
-    unsafe fn mk_pointer<T>(ptr: *const T) -> Self {
+    pub unsafe fn mk_pointer<T>(ptr: *const T) -> Self {
         let addr = ptr as usize;
         // Ensure pointer is properly aligned and >= MIN_POINTER
         assert!(
@@ -946,11 +946,13 @@ mod tests {
     }
 
     #[derive(Debug)]
-    struct TestValue(String);
+    struct TestValue {
+        _0: String,
+    }
 
     #[test]
     fn encode_ptr() {
-        let my_value = Box::new(TestValue("blarg".to_string()));
+        let my_value = Box::new(TestValue { _0: "blarg".to_string() });
         let x = unsafe { Var::mk_pointer(my_value.as_ref()) };
         assert_eq!(x.get_type(), VarType::Pointer);
         assert!(x.is_pointer());

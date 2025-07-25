@@ -15,14 +15,12 @@
 //! Provides an interactive shell with readline support, history, and error handling.
 
 use rol::bytecode::{BytecodeCompiler, BytecodeJIT};
-use rol::gc::{
-    clear_thread_roots, register_var_as_root,
-};
+use rol::gc::{clear_thread_roots, register_var_as_root};
+use rol::heap::Environment;
 use rol::parser::parse_expr_string;
 use rol::var::{Var, VarType};
 use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
-use rol::heap::Environment;
 
 /// REPL state that maintains the bytecode compiler and JIT
 pub struct Repl {
@@ -35,7 +33,6 @@ pub struct Repl {
 impl Repl {
     /// Create a new REPL instance
     pub fn new() -> std::result::Result<Self, ReadlineError> {
-
         let bytecode_compiler = BytecodeCompiler::new();
         let jit = BytecodeJIT::new();
         let editor = DefaultEditor::new()?;

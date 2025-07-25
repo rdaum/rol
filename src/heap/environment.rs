@@ -14,7 +14,9 @@
 //! Environment system for lexical scoping in JIT-compiled functions.
 //! Uses offset-based addressing for efficient variable access.
 
-use crate::heap::flexible_utils::{alloc_with_trailing, free_with_trailing, trailing_ptr, trailing_slice};
+use crate::heap::flexible_utils::{
+    alloc_with_trailing, free_with_trailing, trailing_ptr, trailing_slice,
+};
 use crate::var::Var;
 
 /// Lexical address for variables - avoids symbol lookup at runtime.
@@ -43,32 +45,38 @@ impl Environment {
     /// All slots are initialized to Var::none().
     pub fn new(slot_count: u32, parent: Option<Var>) -> *mut Environment {
         unsafe {
-            alloc_with_trailing(slot_count as usize, |ptr: *mut Environment, slots_ptr: *mut u64| {
-                // Initialize header
-                (*ptr).parent = parent.map_or(0, |p| p.as_u64());
-                (*ptr).size = slot_count;
+            alloc_with_trailing(
+                slot_count as usize,
+                |ptr: *mut Environment, slots_ptr: *mut u64| {
+                    // Initialize header
+                    (*ptr).parent = parent.map_or(0, |p| p.as_u64());
+                    (*ptr).size = slot_count;
 
-                // Initialize all slots to none
-                for i in 0..slot_count as usize {
-                    *slots_ptr.add(i) = Var::none().as_u64();
-                }
-            })
+                    // Initialize all slots to none
+                    for i in 0..slot_count as usize {
+                        *slots_ptr.add(i) = Var::none().as_u64();
+                    }
+                },
+            )
         }
     }
 
     /// Create an environment from a slice of initial values.
     pub fn from_values(values: &[Var], parent: Option<Var>) -> *mut Environment {
         unsafe {
-            alloc_with_trailing(values.len(), |ptr: *mut Environment, slots_ptr: *mut u64| {
-                // Initialize header
-                (*ptr).parent = parent.map_or(0, |p| p.as_u64());
-                (*ptr).size = values.len() as u32;
+            alloc_with_trailing(
+                values.len(),
+                |ptr: *mut Environment, slots_ptr: *mut u64| {
+                    // Initialize header
+                    (*ptr).parent = parent.map_or(0, |p| p.as_u64());
+                    (*ptr).size = values.len() as u32;
 
-                // Initialize slots with provided values
-                for (i, &value) in values.iter().enumerate() {
-                    *slots_ptr.add(i) = value.as_u64();
-                }
-            })
+                    // Initialize slots with provided values
+                    for (i, &value) in values.iter().enumerate() {
+                        *slots_ptr.add(i) = value.as_u64();
+                    }
+                },
+            )
         }
     }
 
@@ -183,7 +191,7 @@ impl Environment {
         if ptr.is_null() {
             return;
         }
-        
+
         let element_count = unsafe { (*ptr).size as usize };
         unsafe { free_with_trailing::<Environment, u64>(ptr, element_count) };
     }
@@ -546,12 +554,6 @@ mod tests {
             if let Some(child_ptr) = child_var.as_environment() {
                 assert_eq!((*child_ptr).size, 1);
                 assert_ne!((*child_ptr).parent, 0);
-
-                // Clean up
-                if let Some(parent_ptr) = (*child_ptr).parent().unwrap().as_environment() {
-                    // mmtk handles cleanup automatically
-                }
-                // mmtk handles cleanup automatically
             }
         }
     }
