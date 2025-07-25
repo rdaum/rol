@@ -14,9 +14,7 @@
 mod ast;
 mod bench;
 mod bytecode;
-mod compiler;
 mod gc;
-mod integration_tests;
 mod jit;
 mod lexer;
 mod heap;

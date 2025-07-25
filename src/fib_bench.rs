@@ -16,7 +16,6 @@
 
 mod ast;
 mod bytecode;
-mod compiler;
 mod gc;
 mod heap;
 mod jit;
