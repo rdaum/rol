@@ -1,0 +1,25 @@
+[package]
+name = "rol"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ahash = "0.8"
+boxcar = "0.2"
+once_cell = "1.21"
+papaya = "0.2"
+paste = "1.0"
+rustyline = "14.0"
+
+# Cranelift JIT dependencies
+cranelift = "0.122"
+cranelift-jit = "0.122"
+cranelift-module = "0.122"
+cranelift-native = "0.122"
+
+# GC! Enable vm_space feature for GenImmix virtual memory management
+mmtk = { version = "0.31.0", features = ["vm_space"] }
+
+[[bin]]
+name = "fib_bench"
+path = "src/fib_bench.rs"
