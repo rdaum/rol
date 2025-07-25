@@ -29,6 +29,6 @@ in a frenzy over a few days.
 
 ## If you're crazy...
 
-`cargon run --bin rol`
+`cargo run --bin rol`
 
 GPL3
