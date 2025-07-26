@@ -27,6 +27,10 @@ use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 
+// ================================================================================================
+// Global state and initialization
+// ================================================================================================
+
 /// Global MMTk instance - thread-safe lazy initialization
 static MMTK_INSTANCE: OnceLock<Box<MMTK<RolVM>>> = OnceLock::new();
 static MMTK_INITIALIZED: AtomicBool = AtomicBool::new(false);
@@ -51,6 +55,10 @@ static GC_SAFEPOINT_REQUESTED: AtomicBool = AtomicBool::new(false);
 static GLOBAL_ROOT_SET: OnceLock<Mutex<SimpleRootSet>> = OnceLock::new();
 /// Thread-local root set - simplified to a single instance for now
 static CURRENT_ROOT_SET: OnceLock<Mutex<SimpleRootSet>> = OnceLock::new();
+
+// ================================================================================================
+// VMBinding trait implementations
+// ================================================================================================
 
 /// ROL VM binding
 #[derive(Default)]
@@ -98,9 +106,8 @@ impl ActivePlan<RolVM> for RolVM {
     }
 
     fn mutators<'a>() -> Box<dyn Iterator<Item = &'a mut Mutator<RolVM>> + 'a> {
-        // For now, we don't need to iterate over mutators often
-        // Return empty iterator as this is mainly used for GC coordination
-        // TODO: fill me in
+        // Return empty iterator for now since we handle mutator coordination
+        // via safepoints rather than direct iteration
         Box::new(std::iter::empty())
     }
 }
@@ -111,18 +118,32 @@ impl Collection<RolVM> for RolVM {
     where
         F: FnMut(&'static mut Mutator<RolVM>),
     {
-        // Mutators are already stopped by block_for_gc
-        // In a multi-threaded implementation, we'd iterate through all mutators here
-        // For now, we just acknowledge that the single mutator is stopped
+        // Signal that GC is starting and request safepoints
+        let gc_sync = GC_SYNC.get().expect("GC sync not initialized");
+        let (lock, _condvar) = &**gc_sync;
+        {
+            let mut gc_in_progress = lock.lock().unwrap();
+            *gc_in_progress = true;
+        }
+
+        // Set safepoint flag - mutators will block at next safepoint check
+        GC_SAFEPOINT_REQUESTED.store(true, Ordering::Release);
+        
+        eprintln!("[GC] Requested all mutators to stop at safepoints");
     }
 
     fn resume_mutators(_tls: VMWorkerThread) {
+        // Clear safepoint request flag first  
+        GC_SAFEPOINT_REQUESTED.store(false, Ordering::Release);
+        
         // Signal all waiting mutator threads to resume
         let gc_sync = GC_SYNC.get().expect("GC sync not initialized");
         let (lock, condvar) = &**gc_sync;
         let mut gc_in_progress = lock.lock().unwrap();
         *gc_in_progress = false;
         condvar.notify_all();
+        
+        eprintln!("[GC] Resumed all mutators");
     }
 
     fn block_for_gc(_tls: VMMutatorThread) {
@@ -136,41 +157,22 @@ impl Collection<RolVM> for RolVM {
     }
 
     fn spawn_gc_thread(_tls: VMThread, _ctx: GCThreadContext<RolVM>) {
-        // Start GC - signal that GC is in progress
-        let gc_sync = GC_SYNC.get().expect("GC sync not initialized");
-        let (lock, _condvar) = &**gc_sync;
-        {
-            let mut gc_in_progress = lock.lock().unwrap();
-            *gc_in_progress = true;
-        }
-
-        // Set safepoint flag to request all mutator threads to pause
-        GC_SAFEPOINT_REQUESTED.store(true, Ordering::Release);
-
         eprintln!("[GC] Starting garbage collection cycle");
 
-        // For now, just spawn a simple thread that runs the context
-        // TODO: Implement proper GC thread management
+        // Just spawn the MMTk worker - let MMTk call our stop/resume methods
         std::thread::spawn(move || {
-            // Let MMTk handle the GC work - for now just a placeholder
-            // The actual GC coordination happens through other MMTk APIs
             eprintln!("[GC] GC worker thread running");
 
-            // Resume mutators after a brief pause (simulating GC work)
-            std::thread::sleep(std::time::Duration::from_millis(1));
+            // Create worker thread context and delegate to MMTk
+            let worker_tls = VMWorkerThread(_tls);
+            match _ctx {
+                GCThreadContext::Worker(worker) => {
+                    let mmtk = get_mmtk_instance();
+                    memory_manager::start_worker(mmtk, worker_tls, worker);
+                }
+            }
 
             eprintln!("[GC] Garbage collection cycle completed");
-
-            // Signal GC completion
-            let gc_sync = GC_SYNC.get().expect("GC sync not initialized");
-            let (lock, condvar) = &**gc_sync;
-            let mut gc_in_progress = lock.lock().unwrap();
-            *gc_in_progress = false;
-
-            // Clear safepoint request flag
-            GC_SAFEPOINT_REQUESTED.store(false, Ordering::Release);
-
-            condvar.notify_all();
         });
     }
 }
@@ -520,26 +522,6 @@ pub fn ensure_mmtk_initialized_for_tests() {
     }
 }
 
-/// Manually trigger garbage collection for testing
-pub fn trigger_gc() {
-    if !is_mmtk_initialized() {
-        println!("MMTk not initialized, cannot trigger GC");
-        return;
-    }
-
-    println!("Triggering garbage collection...");
-    let mmtk = get_mmtk_instance();
-
-    // Get current thread as mutator thread
-    let thread_id = std::thread::current().id();
-    let thread_addr = unsafe { Address::from_usize(&thread_id as *const _ as usize) };
-    let mutator_thread = VMMutatorThread(VMThread(OpaquePointer::from_address(thread_addr)));
-
-    // Manually trigger a GC cycle
-    mmtk.harness_begin(mutator_thread);
-
-    println!("Garbage collection completed");
-}
 
 /// Allocate memory using MMTk with thread-local mutator
 pub fn mmtk_alloc(size: usize) -> *mut u8 {
@@ -572,23 +554,23 @@ pub fn mmtk_alloc(size: usize) -> *mut u8 {
     })
 }
 
-/// Placeholder for MMTk allocation - falls back to system allocator for now
+/// Placeholder for MMTk allocation - falls back to system allocator when MMTk not initialized  
 pub fn mmtk_alloc_placeholder(size: usize) -> *mut u8 {
     use std::alloc::{Layout, alloc};
-
     let layout = Layout::from_size_align(size, 8).unwrap();
     unsafe { alloc(layout) }
 }
 
-/// Placeholder for MMTk deallocation
+/// Placeholder for MMTk deallocation - used with placeholder allocator
 pub unsafe fn mmtk_dealloc_placeholder(ptr: *mut u8, size: usize) {
     use std::alloc::{Layout, dealloc};
-
     let layout = Layout::from_size_align(size, 8).unwrap();
-    unsafe {
-        dealloc(ptr, layout);
-    }
+    unsafe { dealloc(ptr, layout); }
 }
+
+// ================================================================================================
+// Root set management
+// ================================================================================================
 
 /// Register a heap object as a global root (survives across function calls)
 pub fn register_global_root(ptr: *mut dyn GcTrace) {
@@ -679,6 +661,10 @@ pub fn register_var_as_root(var: crate::var::Var, is_global: bool) {
         }
     }
 }
+
+// ================================================================================================
+// Write barriers for concurrent collection
+// ================================================================================================
 
 /// Write barrier for concurrent garbage collection
 /// Call this before modifying any heap object field that contains object references
@@ -857,6 +843,10 @@ macro_rules! with_raw_write_barrier {
     }};
 }
 
+// ================================================================================================
+// JIT-callable functions for generated code
+// ================================================================================================
+
 /// JIT-callable write barrier for environment variable assignments
 /// Call this before setting any environment slot to a new value
 #[unsafe(no_mangle)]
@@ -974,8 +964,28 @@ pub extern "C" fn jit_safepoint_check() {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use crate::var::Var;
+
+    /// Manually trigger garbage collection for testing
+    fn trigger_gc() {
+        if !is_mmtk_initialized() {
+            println!("MMTk not initialized, cannot trigger GC");
+            return;
+        }
+
+        println!("Triggering garbage collection...");
+        let mmtk = get_mmtk_instance();
+
+        // Get current thread as mutator thread
+        let thread_id = std::thread::current().id();
+        let thread_addr = unsafe { Address::from_usize(&thread_id as *const _ as usize) };
+        let mutator_thread = VMMutatorThread(VMThread(OpaquePointer::from_address(thread_addr)));
+
+        // Manually trigger a GC cycle
+        mmtk.harness_begin(mutator_thread);
+
+        println!("Garbage collection completed");
+    }
 
     #[test]
     #[ignore] // Disabled due to MMTk shared state issues - run with: cargo test -- --ignored
