@@ -23,6 +23,7 @@ use mmtk::util::options::PlanSelector;
 use mmtk::util::{Address, ObjectReference};
 use mmtk::vm::*;
 use mmtk::*;
+use std::cell::Cell;
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
@@ -128,21 +129,21 @@ impl Collection<RolVM> for RolVM {
 
         // Set safepoint flag - mutators will block at next safepoint check
         GC_SAFEPOINT_REQUESTED.store(true, Ordering::Release);
-        
+
         eprintln!("[GC] Requested all mutators to stop at safepoints");
     }
 
     fn resume_mutators(_tls: VMWorkerThread) {
-        // Clear safepoint request flag first  
+        // Clear safepoint request flag first
         GC_SAFEPOINT_REQUESTED.store(false, Ordering::Release);
-        
+
         // Signal all waiting mutator threads to resume
         let gc_sync = GC_SYNC.get().expect("GC sync not initialized");
         let (lock, condvar) = &**gc_sync;
         let mut gc_in_progress = lock.lock().unwrap();
         *gc_in_progress = false;
         condvar.notify_all();
-        
+
         eprintln!("[GC] Resumed all mutators");
     }
 
@@ -522,7 +523,6 @@ pub fn ensure_mmtk_initialized_for_tests() {
     }
 }
 
-
 /// Allocate memory using MMTk with thread-local mutator
 pub fn mmtk_alloc(size: usize) -> *mut u8 {
     if !is_mmtk_initialized() {
@@ -565,7 +565,9 @@ pub fn mmtk_alloc_placeholder(size: usize) -> *mut u8 {
 pub unsafe fn mmtk_dealloc_placeholder(ptr: *mut u8, size: usize) {
     use std::alloc::{Layout, dealloc};
     let layout = Layout::from_size_align(size, 8).unwrap();
-    unsafe { dealloc(ptr, layout); }
+    unsafe {
+        dealloc(ptr, layout);
+    }
 }
 
 // ================================================================================================
@@ -945,10 +947,47 @@ pub extern "C" fn jit_memory_write_barrier(
     );
 }
 
+// ================================================================================================
+// Task coordination infrastructure
+// ================================================================================================
+
+/// Thread-local task control flags - much simpler with isolated heaps
+thread_local! {
+    /// ID of current task running on this thread (None if not in task)
+    static CURRENT_TASK_ID: Cell<Option<u64>> = const { Cell::new(None) };
+    /// Flag indicating this task should be killed at next safepoint
+    static TASK_KILL_REQUESTED: Cell<bool> = const { Cell::new(false) };
+    /// Flag indicating this task should yield at next safepoint
+    static TASK_YIELD_REQUESTED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Set the current task context for this thread
+pub fn set_current_task_context(task_id: u64) {
+    CURRENT_TASK_ID.with(|id| id.set(Some(task_id)));
+}
+
+/// Clear the current task context for this thread
+pub fn clear_current_task_context() {
+    CURRENT_TASK_ID.with(|id| id.set(None));
+    TASK_KILL_REQUESTED.with(|f| f.set(false));
+    TASK_YIELD_REQUESTED.with(|f| f.set(false));
+}
+
+/// Request that the current task be killed at next safepoint
+pub fn request_task_kill() {
+    TASK_KILL_REQUESTED.with(|f| f.set(true));
+}
+
+/// Request that the current task yield at next safepoint
+pub fn request_task_yield() {
+    TASK_YIELD_REQUESTED.with(|f| f.set(true));
+}
+
 /// JIT safepoint check - called from JIT-generated code at strategic points
 /// This is the heart of the cooperative GC coordination system
+/// Returns: 0 = continue, 1 = yielded, 2 = killed
 #[unsafe(no_mangle)]
-pub extern "C" fn jit_safepoint_check() {
+pub extern "C" fn jit_safepoint_check() -> u32 {
     // Fast path: check if GC is requested (single atomic load)
     if GC_SAFEPOINT_REQUESTED.load(Ordering::Acquire) {
         // Slow path: block until GC completes
@@ -959,6 +998,20 @@ pub extern "C" fn jit_safepoint_check() {
             gc_in_progress = condvar.wait(gc_in_progress).unwrap();
         }
     }
+
+    // Check task control flags (only relevant when running in task context)
+    let should_kill = TASK_KILL_REQUESTED.with(|f| f.get());
+    let should_yield = TASK_YIELD_REQUESTED.with(|f| f.get());
+
+    if should_kill {
+        return 2; // KILLED signal
+    }
+    if should_yield {
+        TASK_YIELD_REQUESTED.with(|f| f.set(false)); // Clear flag
+        return 1; // YIELDED signal  
+    }
+
+    0 // CONTINUE
 }
 
 #[cfg(test)]

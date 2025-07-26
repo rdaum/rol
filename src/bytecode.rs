@@ -22,6 +22,7 @@ use crate::var::Var;
 use crate::gc::{
     WriteBarrierGuard, jit_memory_write_barrier, jit_safepoint_check, jit_stack_write_barrier,
 };
+use crate::scheduler::ExecutionResult;
 use crate::with_write_barrier;
 use cranelift::codegen::ir::FuncRef;
 use cranelift::codegen::ir::StackSlot;
@@ -289,6 +290,48 @@ pub extern "C" fn jit_call_closure(
     }
 }
 
+/// JIT helper function for spawning tasks
+/// Takes a closure and returns a task handle
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_spawn_task(_jit_ptr: *mut BytecodeJIT, closure: u64) -> u64 {
+    use crate::scheduler::Scheduler;
+
+    let closure_var = Var::from_u64(closure);
+
+    match Scheduler::spawn_task(closure_var) {
+        Ok(task_var) => task_var.as_u64(),
+        Err(_) => Var::none().as_u64(),
+    }
+}
+
+/// JIT helper function for joining tasks  
+/// Takes a task handle and returns the result
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_join_task(_jit_ptr: *mut BytecodeJIT, task: u64) -> u64 {
+    use crate::scheduler::Scheduler;
+
+    let task_var = Var::from_u64(task);
+
+    match Scheduler::join_task(task_var) {
+        Ok(result_var) => result_var.as_u64(),
+        Err(_) => Var::none().as_u64(),
+    }
+}
+
+/// JIT helper function for killing tasks
+/// Takes a task handle and returns none
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_kill_task(_jit_ptr: *mut BytecodeJIT, task: u64) -> u64 {
+    use crate::scheduler::Scheduler;
+
+    let task_var = Var::from_u64(task);
+
+    match Scheduler::kill_task(task_var) {
+        Ok(_) => Var::none().as_u64(),
+        Err(_) => Var::none().as_u64(),
+    }
+}
+
 /// Bytecode instruction set for our stack-based VM
 #[derive(Debug, Clone, PartialEq)]
 pub enum Opcode {
@@ -389,6 +432,16 @@ pub enum Opcode {
 
     /// Return: pop stack value and return it
     Return,
+
+    // === Task Operations ===
+    /// Spawn task: pop closure from stack, push task handle
+    SpawnTask,
+
+    /// Join task: pop task handle from stack, push result
+    JoinTask,
+
+    /// Kill task: pop task handle from stack, push none
+    KillTask,
 
     // === Closures ===
     /// Create closure: pop N upvalues from stack, push closure
@@ -916,6 +969,9 @@ impl BytecodeCompiler {
             BuiltinOp::And => self.function.emit(Opcode::And),
             BuiltinOp::Or => self.function.emit(Opcode::Or),
             BuiltinOp::Not => self.function.emit(Opcode::Not),
+            BuiltinOp::SpawnTask => self.function.emit(Opcode::SpawnTask),
+            BuiltinOp::JoinTask => self.function.emit(Opcode::JoinTask),
+            BuiltinOp::KillTask => self.function.emit(Opcode::KillTask),
         }
 
         Ok(())
@@ -938,6 +994,9 @@ impl BytecodeCompiler {
             BuiltinOp::And => "and",
             BuiltinOp::Or => "or",
             BuiltinOp::Not => "not",
+            BuiltinOp::SpawnTask => "spawn-task",
+            BuiltinOp::JoinTask => "join-task",
+            BuiltinOp::KillTask => "kill-task",
         }
     }
 }
@@ -982,6 +1041,9 @@ impl BytecodeJIT {
         builder.symbol("jit_set_global_offset", jit_set_global_offset as *const u8);
         builder.symbol("jit_create_closure", jit_create_closure as *const u8);
         builder.symbol("jit_call_closure", jit_call_closure as *const u8);
+        builder.symbol("jit_spawn_task", jit_spawn_task as *const u8);
+        builder.symbol("jit_join_task", jit_join_task as *const u8);
+        builder.symbol("jit_kill_task", jit_kill_task as *const u8);
 
         // Register write barrier helpers for JIT-generated memory stores
         builder.symbol(
@@ -1094,6 +1156,43 @@ impl BytecodeJIT {
         Var::from_u64(result_bits)
     }
 
+    /// Execute a function that can be suspended/resumed via safepoint signals
+    /// This is the task-aware version that handles yielding and killing
+    pub fn execute_function_resumable(&mut self, func_ptr: *const u8) -> ExecutionResult {
+        // Each task gets its own JIT instance with isolated heap
+        // Safepoints check task flags and return Yielded/Killed as needed
+        // No stack/register state to preserve - fresh call stack each resume
+
+        match self.execute_function_with_safepoint_handling(func_ptr) {
+            Ok(result) => ExecutionResult::Completed(result),
+            Err(signal) => match signal {
+                1 => ExecutionResult::Yielded,
+                2 => ExecutionResult::Killed,
+                _ => ExecutionResult::Error(format!("Unknown safepoint signal: {}", signal)),
+            },
+        }
+    }
+
+    /// Internal helper that executes function and handles safepoint signals
+    fn execute_function_with_safepoint_handling(
+        &mut self,
+        func_ptr: *const u8,
+    ) -> Result<Var, u32> {
+        // The compiled function will call safepoints internally
+        // If a safepoint returns non-zero, the JIT code should return early with that signal
+        // For now, we'll use the same transmute approach but need to handle early returns
+
+        // TODO: This is a simplified implementation
+        // In a full implementation, we'd need to modify the JIT codegen to:
+        // 1. Check safepoint return values
+        // 2. Return early with signal codes instead of continuing execution
+        // 3. Preserve enough state to resume execution later
+
+        let func: fn(*mut BytecodeJIT) -> u64 = unsafe { std::mem::transmute(func_ptr) };
+        let result_bits = func(self as *mut BytecodeJIT);
+        Ok(Var::from_u64(result_bits))
+    }
+
     /// Compile a lambda function body to machine code
     pub fn compile_lambda(&mut self, params: &[Symbol], body: &Expr) -> Result<*const u8, String> {
         // Create function signature: fn(args: *const Var, arg_count: u32, captured_env: u64) -> u64
@@ -1162,6 +1261,9 @@ impl BytecodeJIT {
             safepoint_ref: None,
             stack_write_barrier_ref: None,
             memory_write_barrier_ref: None,
+            spawn_task_ref: None,
+            join_task_ref: None,
+            kill_task_ref: None,
             lambda_registry: None,
             call_conv,
             stack_base: None,
@@ -1308,7 +1410,8 @@ impl BytecodeJIT {
             .declare_func_in_func(get_global_offset_func, &mut lambda_ctx.func);
 
         // Declare safepoint function for lambda context too
-        let lambda_safepoint_sig = self.module.make_signature();
+        let mut lambda_safepoint_sig = self.module.make_signature();
+        lambda_safepoint_sig.returns.push(AbiParam::new(types::I32)); // Returns u32 safepoint signal
         let lambda_safepoint_func = self
             .module
             .declare_function(
@@ -1411,6 +1514,9 @@ impl BytecodeJIT {
             safepoint_ref: Some(lambda_safepoint_ref),
             stack_write_barrier_ref: Some(lambda_stack_write_barrier_ref),
             memory_write_barrier_ref: Some(lambda_memory_write_barrier_ref),
+            spawn_task_ref: None,
+            join_task_ref: None,
+            kill_task_ref: None,
             lambda_registry: self.lambda_registry.as_ref(),
             call_conv: self.native_call_conv(),
             stack_base: None,
@@ -1569,12 +1675,52 @@ impl BytecodeJIT {
             .map_err(|e| format!("Failed to declare get_global_offset: {e}"))?;
 
         // Declare safepoint check function
-        let safepoint_sig = self.module.make_signature();
-        // No parameters, no return value - just a void function call
+        let mut safepoint_sig = self.module.make_signature();
+        safepoint_sig.returns.push(AbiParam::new(types::I32)); // Returns u32 safepoint signal
         let safepoint_func = self
             .module
             .declare_function("jit_safepoint_check", Linkage::Import, &safepoint_sig)
             .map_err(|e| format!("Failed to declare safepoint_check: {e}"))?;
+
+        // Declare task operation functions
+        let spawn_task_sig = {
+            let mut sig = self.module.make_signature();
+            sig.params.push(AbiParam::new(types::I64)); // jit_ptr
+            sig.params.push(AbiParam::new(types::I64)); // closure
+            sig.returns.push(AbiParam::new(types::I64)); // task handle
+            sig
+        };
+
+        let join_task_sig = {
+            let mut sig = self.module.make_signature();
+            sig.params.push(AbiParam::new(types::I64)); // jit_ptr
+            sig.params.push(AbiParam::new(types::I64)); // task handle
+            sig.returns.push(AbiParam::new(types::I64)); // result
+            sig
+        };
+
+        let kill_task_sig = {
+            let mut sig = self.module.make_signature();
+            sig.params.push(AbiParam::new(types::I64)); // jit_ptr
+            sig.params.push(AbiParam::new(types::I64)); // task handle
+            sig.returns.push(AbiParam::new(types::I64)); // none
+            sig
+        };
+
+        let spawn_task_func = self
+            .module
+            .declare_function("jit_spawn_task", Linkage::Import, &spawn_task_sig)
+            .map_err(|e| format!("Failed to declare spawn_task: {e}"))?;
+
+        let join_task_func = self
+            .module
+            .declare_function("jit_join_task", Linkage::Import, &join_task_sig)
+            .map_err(|e| format!("Failed to declare join_task: {e}"))?;
+
+        let kill_task_func = self
+            .module
+            .declare_function("jit_kill_task", Linkage::Import, &kill_task_sig)
+            .map_err(|e| format!("Failed to declare kill_task: {e}"))?;
 
         // Declare write barrier functions
         let stack_write_barrier_sig = {
@@ -1627,6 +1773,16 @@ impl BytecodeJIT {
             .module
             .declare_func_in_func(safepoint_func, builder.func);
 
+        let spawn_task_ref = self
+            .module
+            .declare_func_in_func(spawn_task_func, builder.func);
+        let join_task_ref = self
+            .module
+            .declare_func_in_func(join_task_func, builder.func);
+        let kill_task_ref = self
+            .module
+            .declare_func_in_func(kill_task_func, builder.func);
+
         let stack_write_barrier_ref = self
             .module
             .declare_func_in_func(stack_write_barrier_func, builder.func);
@@ -1647,6 +1803,9 @@ impl BytecodeJIT {
                 safepoint_ref,
                 stack_write_barrier_ref,
                 memory_write_barrier_ref,
+                spawn_task_ref,
+                join_task_ref,
+                kill_task_ref,
                 self.lambda_registry.as_ref(),
                 Some(recursive_calls),
                 call_conv,
@@ -1711,6 +1870,9 @@ struct BytecodeAnalyzer<'a> {
     safepoint_ref: Option<FuncRef>,
     stack_write_barrier_ref: Option<FuncRef>,
     memory_write_barrier_ref: Option<FuncRef>,
+    spawn_task_ref: Option<FuncRef>,
+    join_task_ref: Option<FuncRef>,
+    kill_task_ref: Option<FuncRef>,
     lambda_registry: Option<&'a std::collections::HashMap<FunctionId, (Vec<Symbol>, Function)>>,
     call_conv: CallConv,
 
@@ -1747,6 +1909,9 @@ impl<'a> BytecodeAnalyzer<'a> {
         safepoint_ref: FuncRef,
         stack_write_barrier_ref: FuncRef,
         memory_write_barrier_ref: FuncRef,
+        spawn_task_ref: FuncRef,
+        join_task_ref: FuncRef,
+        kill_task_ref: FuncRef,
         lambda_registry: Option<&'a std::collections::HashMap<FunctionId, (Vec<Symbol>, Function)>>,
         recursive_calls: Option<&'a std::collections::HashMap<Symbol, Vec<RecursiveCallSite>>>,
         call_conv: CallConv,
@@ -1764,6 +1929,9 @@ impl<'a> BytecodeAnalyzer<'a> {
             safepoint_ref: Some(safepoint_ref),
             stack_write_barrier_ref: Some(stack_write_barrier_ref),
             memory_write_barrier_ref: Some(memory_write_barrier_ref),
+            spawn_task_ref: Some(spawn_task_ref),
+            join_task_ref: Some(join_task_ref),
+            kill_task_ref: Some(kill_task_ref),
             lambda_registry,
             call_conv,
             stack_base: None,
@@ -2722,6 +2890,42 @@ impl<'a> BytecodeAnalyzer<'a> {
                     "Jump instructions should be handled by compile_sequence_with_jumps"
                         .to_string(),
                 );
+            }
+
+            // Task operations - spawn, join, and kill tasks
+            Opcode::SpawnTask => {
+                let closure = self.native_pop(builder)?;
+                if let (Some(jit_ptr), Some(spawn_task_ref)) = (self.jit_ptr, self.spawn_task_ref) {
+                    let call_inst = builder.ins().call(spawn_task_ref, &[jit_ptr, closure]);
+                    let task_handle = builder.inst_results(call_inst)[0];
+                    self.native_push(builder, task_handle)?;
+                } else {
+                    return Err(
+                        "SpawnTask requires JIT context and spawn_task function".to_string()
+                    );
+                }
+            }
+
+            Opcode::JoinTask => {
+                let task_handle = self.native_pop(builder)?;
+                if let (Some(jit_ptr), Some(join_task_ref)) = (self.jit_ptr, self.join_task_ref) {
+                    let call_inst = builder.ins().call(join_task_ref, &[jit_ptr, task_handle]);
+                    let result = builder.inst_results(call_inst)[0];
+                    self.native_push(builder, result)?;
+                } else {
+                    return Err("JoinTask requires JIT context and join_task function".to_string());
+                }
+            }
+
+            Opcode::KillTask => {
+                let task_handle = self.native_pop(builder)?;
+                if let (Some(jit_ptr), Some(kill_task_ref)) = (self.jit_ptr, self.kill_task_ref) {
+                    let call_inst = builder.ins().call(kill_task_ref, &[jit_ptr, task_handle]);
+                    let result = builder.inst_results(call_inst)[0];
+                    self.native_push(builder, result)?;
+                } else {
+                    return Err("KillTask requires JIT context and kill_task function".to_string());
+                }
             }
 
             // Other opcodes that don't have native implementations yet

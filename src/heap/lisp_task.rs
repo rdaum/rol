@@ -6,7 +6,6 @@ use crate::gc::{
 };
 use crate::symbol::Symbol;
 use crate::var::Var;
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 /// Task execution states for cooperative scheduling
@@ -60,8 +59,8 @@ pub struct LispTask {
     pub closure: Var,
 
     /// Copy-on-write snapshot of globals at task creation time
-    /// Using std::HashMap for now, may optimize later
-    pub globals_snapshot: HashMap<Symbol, Var>,
+    /// Using im::HashMap for efficient COW semantics
+    pub globals_snapshot: im::HashMap<Symbol, Var>,
 
     /// Task execution result (set when task completes)
     pub result: Option<TaskResult>,
@@ -72,7 +71,7 @@ impl LispTask {
     pub fn new(
         task_id: u64,
         closure: Var,
-        globals_snapshot: HashMap<Symbol, Var>,
+        globals_snapshot: im::HashMap<Symbol, Var>,
     ) -> *mut LispTask {
         let size = std::mem::size_of::<LispTask>();
         // Round up to 8-byte alignment as required by MMTk
@@ -197,7 +196,7 @@ mod tests {
         setup_test();
 
         let closure = Var::none(); // Placeholder closure
-        let globals = HashMap::new();
+        let globals = im::HashMap::new();
 
         let task_ptr = LispTask::new(42, closure, globals);
 
@@ -216,7 +215,7 @@ mod tests {
         setup_test();
 
         let closure = Var::none();
-        let globals = HashMap::new();
+        let globals = im::HashMap::new();
         let task_ptr = LispTask::new(1, closure, globals);
 
         unsafe {
@@ -246,7 +245,7 @@ mod tests {
         setup_test();
 
         let closure = Var::none();
-        let globals = HashMap::new();
+        let globals = im::HashMap::new();
         let task_ptr = LispTask::new(1, closure, globals);
 
         unsafe {
@@ -272,12 +271,11 @@ mod tests {
         setup_test();
 
         let closure = Var::none();
-        let mut globals = HashMap::new();
-
         let sym1 = Symbol::from("x");
         let sym2 = Symbol::from("y");
-        globals.insert(sym1, Var::int(10));
-        globals.insert(sym2, Var::int(20));
+        let globals = im::HashMap::new()
+            .update(sym1, Var::int(10))
+            .update(sym2, Var::int(20));
 
         let task_ptr = LispTask::new(1, closure, globals);
 
@@ -297,7 +295,7 @@ mod tests {
         setup_test();
 
         let closure = Var::none();
-        let globals = HashMap::new();
+        let globals = im::HashMap::new();
         let task_ptr = LispTask::new(1, closure, globals);
 
         unsafe {
@@ -322,7 +320,7 @@ mod tests {
         setup_test();
 
         let closure = Var::none();
-        let globals = HashMap::new();
+        let globals = im::HashMap::new();
         let task_ptr = LispTask::new(1, closure, globals);
 
         unsafe {

@@ -1522,14 +1522,13 @@ mod tests {
     fn test_task_var_integration() {
         use crate::gc::ensure_mmtk_initialized_for_tests;
         use crate::heap::{LispTask, TaskState};
-        use std::collections::HashMap;
 
         // Initialize MMTk for testing
         ensure_mmtk_initialized_for_tests();
 
         // Create a task
         let closure = Var::none();
-        let globals = HashMap::new();
+        let globals = im::HashMap::new();
         let task_ptr = LispTask::new(42, closure, globals);
 
         // Create a Var from the task pointer

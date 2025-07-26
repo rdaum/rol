@@ -19,11 +19,12 @@ use crate::var::Var;
 mod mmtk_binding;
 
 pub use mmtk_binding::{
-    WriteBarrierGuard, clear_thread_roots, initialize_mmtk, is_mmtk_initialized,
-    jit_global_write_barrier, jit_heap_write_barrier, jit_memory_write_barrier,
-    jit_safepoint_check, jit_stack_write_barrier, mmtk_alloc, mmtk_alloc_placeholder,
-    mmtk_bind_mutator, mmtk_dealloc_placeholder, register_global_root, register_thread_root,
-    register_var_as_root,
+    WriteBarrierGuard, clear_current_task_context, clear_thread_roots, initialize_mmtk,
+    is_mmtk_initialized, jit_global_write_barrier, jit_heap_write_barrier,
+    jit_memory_write_barrier, jit_safepoint_check, jit_stack_write_barrier, mmtk_alloc,
+    mmtk_alloc_placeholder, mmtk_bind_mutator, mmtk_dealloc_placeholder, register_global_root,
+    register_thread_root, register_var_as_root, request_task_kill, request_task_yield,
+    set_current_task_context,
 };
 
 #[cfg(test)]

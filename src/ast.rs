@@ -158,6 +158,11 @@ pub enum BuiltinOp {
     And,
     Or,
     Not,
+
+    // Task operations
+    SpawnTask,
+    JoinTask,
+    KillTask,
 }
 
 impl BuiltinOp {
@@ -179,6 +184,9 @@ impl BuiltinOp {
             "and" => Some(BuiltinOp::And),
             "or" => Some(BuiltinOp::Or),
             "not" => Some(BuiltinOp::Not),
+            "spawn-task" => Some(BuiltinOp::SpawnTask),
+            "join-task" => Some(BuiltinOp::JoinTask),
+            "kill-task" => Some(BuiltinOp::KillTask),
             _ => None,
         }
     }
@@ -186,7 +194,9 @@ impl BuiltinOp {
     /// Get the expected number of arguments for this builtin
     pub fn arity(self) -> Option<usize> {
         match self {
-            BuiltinOp::Not => Some(1),
+            BuiltinOp::Not | BuiltinOp::SpawnTask | BuiltinOp::JoinTask | BuiltinOp::KillTask => {
+                Some(1)
+            }
             BuiltinOp::Add
             | BuiltinOp::Sub
             | BuiltinOp::Mul
