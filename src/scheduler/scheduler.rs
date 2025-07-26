@@ -166,9 +166,11 @@ impl Scheduler {
         // Clone task_var for the thread (since we need to move it)
         let task_var_for_thread = task_var;
 
-        // Spawn task on thread pool
-        let join_handle =
-            std::thread::spawn(move || Self::execute_task_isolated(task_var_for_thread));
+        // Spawn task using std::thread but within Rayon's thread pool context
+        // This provides better resource management while maintaining JoinHandle compatibility
+        let join_handle = scheduler.thread_pool.install(|| {
+            std::thread::spawn(move || Self::execute_task_isolated(task_var_for_thread))
+        });
 
         // Store task handle in scheduler
         let handle = TaskHandle {
