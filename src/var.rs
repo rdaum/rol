@@ -386,16 +386,6 @@ impl Var {
         }
     }
 
-    pub fn as_tuple_mut(&mut self) -> Option<&mut [Var]> {
-        if self.is_tuple() {
-            let ptr_bits = unsafe { self.0.value } & !POINTER_TAG_MASK;
-            let ptr = ptr_bits as *mut LispTuple;
-            unsafe { Some((*ptr).as_mut_slice()) }
-        } else {
-            None
-        }
-    }
-
     pub fn as_string(&self) -> Option<&str> {
         if self.is_string() {
             let ptr_bits = unsafe { self.0.value } & !POINTER_TAG_MASK;

@@ -11,18 +11,19 @@
 // this program. If not, see <https://www.gnu.org/licenses/>.
 //
 
-//! Native vector/tuple type optimized for JIT access and MMTk garbage collection.
+//! Native immutable tuple type optimized for JIT access and MMTk garbage collection.
 
 use crate::heap::flexible_utils::{
-    alloc_with_trailing, free_with_trailing, trailing_ptr, trailing_slice, trailing_slice_mut,
+    alloc_with_trailing, free_with_trailing, trailing_ptr, trailing_slice,
 };
 use crate::var::Var;
 use crate::with_write_barrier;
 use std::ptr;
 
-/// Native vector type optimized for JIT access.
+/// Native immutable tuple type optimized for JIT access.
 /// Layout: [length: u64][capacity: u64][elements: Var...]
-/// Vector data follows immediately after capacity field.
+/// Tuple data follows immediately after capacity field.
+/// Once created, tuples are immutable - operations create new tuples.
 #[repr(C)]
 pub struct LispTuple {
     /// Number of elements currently in the vector
@@ -82,79 +83,90 @@ impl LispTuple {
         unsafe { trailing_slice(self as *const LispTuple, self.length as usize) }
     }
 
-    /// Get the elements as a mutable slice
-    pub unsafe fn as_mut_slice(&mut self) -> &mut [Var] {
-        unsafe { trailing_slice_mut(self as *mut LispTuple, self.length as usize) }
-    }
-
-    /// Push an element to the vector (may reallocate)
-    pub unsafe fn push(ptr: *mut LispTuple, element: Var) -> *mut LispTuple {
+    /// Create a new tuple by prepending an element (cons operation)
+    /// This creates a new tuple rather than mutating the existing one
+    pub unsafe fn cons(element: Var, ptr: *mut LispTuple) -> *mut LispTuple {
         unsafe {
-            let length = (*ptr).length;
-            let capacity = (*ptr).capacity;
-
-            if length < capacity {
-                // Space available, just add element
-                let data_ptr = Self::data_ptr(ptr);
-                let slot_ptr = data_ptr.add(length as usize);
-
-                // Use RAII write barrier for new element
-                with_write_barrier!(
-                    ptr as *mut u8,
-                    slot_ptr,
-                    crate::var::Var::none(), // old value is none/uninitialized
-                    element => {
-                        *slot_ptr = element;
-                    }
-                );
-
-                (*ptr).length = length + 1;
-                ptr
-            } else {
-                // Need to reallocate
-                let new_capacity = if capacity == 0 { 4 } else { capacity * 2 };
-                let new_ptr = Self::with_capacity(new_capacity as usize);
-
-                // Copy existing elements with write barriers
-                if length > 0 {
-                    let old_data = Self::data_ptr(ptr);
-                    let new_data = Self::data_ptr(new_ptr);
-
-                    // Copy existing elements with RAII write barriers
-                    for i in 0..length as usize {
-                        let old_element = *old_data.add(i);
-                        let new_slot_ptr = new_data.add(i);
-
-                        crate::with_write_barrier!(
-                            new_ptr as *mut u8,
-                            new_slot_ptr,
-                            crate::var::Var::none(), // new tuple slot starts as none
-                            crate::var::Var::from_u64(old_element.as_u64()) => {
-                                *new_slot_ptr = old_element;
-                            }
-                        );
-                    }
+            let old_length = (*ptr).length;
+            let new_length = old_length + 1;
+            
+            // Create new tuple with space for one more element
+            let new_ptr = Self::with_capacity(new_length as usize);
+            (*new_ptr).length = new_length;
+            
+            let old_data = Self::data_ptr(ptr);
+            let new_data = Self::data_ptr(new_ptr);
+            
+            // Set first element to the new element
+            with_write_barrier!(
+                new_ptr as *mut u8,
+                new_data,
+                crate::var::Var::none(),
+                element => {
+                    *new_data = element;
                 }
-
-                // Add new element with RAII write barrier
-                (*new_ptr).length = length + 1;
-                let new_data = Self::data_ptr(new_ptr);
-                let new_slot_ptr = new_data.add(length as usize);
-
-                crate::with_write_barrier!(
+            );
+            
+            // Copy remaining elements from old tuple
+            for i in 0..old_length as usize {
+                let old_element = *old_data.add(i);
+                let new_slot_ptr = new_data.add(i + 1);
+                
+                with_write_barrier!(
                     new_ptr as *mut u8,
                     new_slot_ptr,
                     crate::var::Var::none(),
-                    element => {
-                        *new_slot_ptr = element;
+                    old_element => {
+                        *new_slot_ptr = old_element;
                     }
                 );
-
-                // Free old vector
-                Self::free(ptr);
-
-                new_ptr
             }
+            
+            new_ptr
+        }
+    }
+
+    /// Create a new tuple by appending an element 
+    /// This creates a new tuple rather than mutating the existing one
+    pub unsafe fn append(ptr: *mut LispTuple, element: Var) -> *mut LispTuple {
+        unsafe {
+            let old_length = (*ptr).length;
+            let new_length = old_length + 1;
+            
+            // Create new tuple with space for one more element
+            let new_ptr = Self::with_capacity(new_length as usize);
+            (*new_ptr).length = new_length;
+            
+            let old_data = Self::data_ptr(ptr);
+            let new_data = Self::data_ptr(new_ptr);
+            
+            // Copy existing elements first
+            for i in 0..old_length as usize {
+                let old_element = *old_data.add(i);
+                let new_slot_ptr = new_data.add(i);
+                
+                with_write_barrier!(
+                    new_ptr as *mut u8,
+                    new_slot_ptr,
+                    crate::var::Var::none(),
+                    old_element => {
+                        *new_slot_ptr = old_element;
+                    }
+                );
+            }
+            
+            // Add new element at the end
+            let new_slot_ptr = new_data.add(old_length as usize);
+            with_write_barrier!(
+                new_ptr as *mut u8,
+                new_slot_ptr,
+                crate::var::Var::none(),
+                element => {
+                    *new_slot_ptr = element;
+                }
+            );
+            
+            new_ptr
         }
     }
 
