@@ -11,9 +11,10 @@ pub mod jit;
 pub mod lexer;
 pub mod parser;
 pub mod protocol;
+pub mod scheduler;
 pub mod symbol;
 pub mod var;
 
 // Re-export main public APIs
 pub use gc::{initialize_mmtk, mmtk_bind_mutator};
-pub use var::{Var};
+pub use var::Var;

@@ -942,7 +942,9 @@ mod tests {
 
     #[test]
     fn encode_ptr() {
-        let my_value = Box::new(TestValue { _0: "blarg".to_string() });
+        let my_value = Box::new(TestValue {
+            _0: "blarg".to_string(),
+        });
         let x = unsafe { Var::mk_pointer(my_value.as_ref()) };
         assert_eq!(x.get_type(), VarType::Pointer);
         assert!(x.is_pointer());

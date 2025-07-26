@@ -90,35 +90,41 @@ macro_rules! store_with_write_barrier {
 }
 
 /// Runtime helper function for DefGlobal opcode
+/// Now delegates to Scheduler for shared global state
 #[unsafe(no_mangle)]
 pub extern "C" fn jit_set_global(jit_ptr: *mut BytecodeJIT, symbol_id: u64, value: u64) {
-    unsafe {
-        let jit = &mut *jit_ptr;
-        let symbol = Symbol::from_id(symbol_id as u32);
-        let new_var = Var::from_u64(value);
-        let old_var = jit.get_global(symbol).unwrap_or(Var::none());
+    use crate::scheduler::Scheduler;
 
-        // Use RAII write barrier for global assignment
-        // For globals, we don't have a specific containing object, so use null
-        let _guard =
-            WriteBarrierGuard::new(std::ptr::null_mut(), std::ptr::null_mut(), old_var, new_var);
+    let symbol = Symbol::from_id(symbol_id as u32);
+    let new_var = Var::from_u64(value);
+    let old_var = Scheduler::get_global(symbol).unwrap_or(Var::none());
 
-        jit.set_global(symbol, new_var);
-    }
+    // Use RAII write barrier for global assignment
+    // For globals, we don't have a specific containing object, so use null
+    let _guard =
+        WriteBarrierGuard::new(std::ptr::null_mut(), std::ptr::null_mut(), old_var, new_var);
+
+    // Set in shared Scheduler instead of per-JIT storage
+    Scheduler::set_global(symbol, new_var);
 }
 
 /// Runtime helper function for LoadVar opcode (dynamic global lookup)  
+/// Now checks Scheduler first, falls back to JIT offsets for performance
 #[unsafe(no_mangle)]
 pub extern "C" fn jit_get_global(jit_ptr: *mut BytecodeJIT, symbol_id: u64) -> u64 {
-    unsafe {
-        let jit = &*jit_ptr;
-        let symbol = Symbol::from_id(symbol_id as u32);
-        if let Some(var) = jit.get_global(symbol) {
-            var.as_u64()
-        } else {
-            Var::none().as_u64() // Return none for undefined globals
-        }
+    use crate::scheduler::Scheduler;
+
+    let symbol = Symbol::from_id(symbol_id as u32);
+
+    // First check shared Scheduler globals
+    if let Some(var) = Scheduler::get_global(symbol) {
+        return var.as_u64();
     }
+
+    // Note: Offset-based lookups should be compiled directly as jit_get_global_offset calls
+    // This function is for dynamic symbol-based lookups that go through the Scheduler
+
+    Var::none().as_u64() // Return none for undefined globals
 }
 
 /// Runtime helper function for LoadGlobal opcode (fast offset-based lookup)
@@ -126,7 +132,7 @@ pub extern "C" fn jit_get_global(jit_ptr: *mut BytecodeJIT, symbol_id: u64) -> u
 pub extern "C" fn jit_get_global_offset(jit_ptr: *mut BytecodeJIT, offset: u32) -> u64 {
     unsafe {
         let jit = &*jit_ptr;
-        if let Some(var) = jit.get_global_offset(offset) {
+        if let Some(var) = jit.get_global_by_offset(offset) {
             var.as_u64()
         } else {
             Var::none().as_u64() // Return none for undefined offsets
@@ -140,7 +146,7 @@ pub extern "C" fn jit_set_global_offset(jit_ptr: *mut BytecodeJIT, offset: u32, 
     unsafe {
         let jit = &mut *jit_ptr;
         let new_var = Var::from_u64(value);
-        let old_var = jit.get_global_offset(offset).unwrap_or(Var::none());
+        let old_var = jit.get_global_by_offset(offset).unwrap_or(Var::none());
 
         // Use RAII write barrier for global offset assignment
         let _guard =
@@ -944,8 +950,7 @@ pub struct BytecodeJIT {
     builder_context: FunctionBuilderContext,
     function_counter: u32,
     isa: cranelift::codegen::isa::OwnedTargetIsa,
-    /// Global variables that persist between REPL evaluations
-    global_variables: std::collections::HashMap<Symbol, Var>, // Dynamic variables (mutable)
+    // Note: global_variables HashMap moved to Scheduler for shared access
     global_offsets: Vec<Var>, // Fast offset-based storage for immutable globals
     /// Lambda registry available during execution
     lambda_registry: Option<std::collections::HashMap<FunctionId, (Vec<Symbol>, Function)>>,
@@ -1007,7 +1012,7 @@ impl BytecodeJIT {
             builder_context: FunctionBuilderContext::new(),
             function_counter: 0,
             isa,
-            global_variables: std::collections::HashMap::new(),
+            // global_variables moved to Scheduler
             global_offsets: Vec::new(),
             lambda_registry: None,
             compiled_lambdas: std::collections::HashMap::new(),
@@ -1020,44 +1025,10 @@ impl BytecodeJIT {
         self.isa.default_call_conv()
     }
 
-    /// Set a global variable value (dynamic/mutable variables)
+    /// Set a global variable value (now delegates to Scheduler)
     pub fn set_global(&mut self, symbol: Symbol, value: Var) {
-        // Get old value for write barrier (if it exists)
-        let old_value = self
-            .global_variables
-            .get(&symbol)
-            .copied()
-            .unwrap_or(Var::none());
-
-        // For HashMap storage, we need to handle the write barrier for the heap reference
-        // Since HashMap manages its own memory layout, we use the JIT global write barrier helper
-        if let Some(existing_slot) = self.global_variables.get_mut(&symbol) {
-            // Updating existing entry
-            let slot_ptr = existing_slot as *mut Var;
-            with_write_barrier!(
-                std::ptr::null_mut(),
-                slot_ptr,
-                old_value,
-                value => {
-                    *existing_slot = value;
-                }
-            );
-        } else {
-            // New entry - HashMap will handle allocation, but we still need write barrier for the value
-            self.global_variables.insert(symbol, value);
-            // For new insertions, we should ideally call the write barrier on the newly inserted slot
-            if let Some(new_slot) = self.global_variables.get_mut(&symbol) {
-                let slot_ptr = new_slot as *mut Var;
-                with_write_barrier!(
-                    std::ptr::null_mut(),
-                    slot_ptr,
-                    Var::none(),
-                    value => {
-                        // Value is already inserted, this barrier just notifies GC
-                    }
-                );
-            }
-        }
+        use crate::scheduler::Scheduler;
+        Scheduler::set_global(symbol, value);
     }
 
     /// Set a global variable by offset (fast path for immutable globals)
@@ -1091,13 +1062,17 @@ impl BytecodeJIT {
         self.compiled_globals.insert(symbol, (func_ptr, arity));
     }
 
-    /// Get a global variable value (dynamic lookup)
+    /// Get a global variable value (now delegates to Scheduler for shared access)
     pub fn get_global(&self, symbol: Symbol) -> Option<Var> {
-        self.global_variables.get(&symbol).cloned()
+        use crate::scheduler::Scheduler;
+
+        // All global lookups go through the Scheduler in the hybrid model
+        // Offset-based access is handled directly in compiled code via jit_get_global_offset
+        Scheduler::get_global(symbol)
     }
 
     /// Get a global variable by offset (fast path)
-    pub fn get_global_offset(&self, offset: u32) -> Option<Var> {
+    pub fn get_global_by_offset(&self, offset: u32) -> Option<Var> {
         let offset = offset as usize;
         if offset < self.global_offsets.len() {
             Some(self.global_offsets[offset])
@@ -1106,9 +1081,10 @@ impl BytecodeJIT {
         }
     }
 
-    /// Get all global variables
-    pub fn get_globals(&self) -> &std::collections::HashMap<Symbol, Var> {
-        &self.global_variables
+    /// Get all global variables (now returns from Scheduler for compatibility)
+    pub fn get_globals(&self) -> std::collections::HashMap<Symbol, Var> {
+        use crate::scheduler::Scheduler;
+        Scheduler::get_globals_for_compilation()
     }
 
     /// Execute a compiled function with this JIT as context
@@ -1446,7 +1422,8 @@ impl BytecodeJIT {
         };
 
         // Pre-populate analyzer with global variables as constants
-        for (symbol, var) in &self.global_variables {
+        let globals = self.get_globals(); // Now gets from Scheduler
+        for (symbol, var) in &globals {
             let const_value = builder.ins().iconst(types::I64, var.as_u64() as i64);
             analyzer.variables.insert(*symbol, const_value);
         }
@@ -1493,8 +1470,9 @@ impl BytecodeJIT {
 
         // Pre-populate global offsets with values from the global variables
         // This ensures that global offset lookups will work correctly
+        let globals = self.get_globals(); // Now gets from Scheduler
         for (&symbol, &offset) in global_symbol_table {
-            if let Some(var) = self.global_variables.get(&symbol) {
+            if let Some(var) = globals.get(&symbol) {
                 self.set_global_offset(offset, *var);
             }
         }
@@ -1678,7 +1656,8 @@ impl BytecodeJIT {
             builder.ins().call(safepoint_ref, &[]);
 
             // Pre-populate analyzer with global variables as constants
-            for (symbol, var) in &self.global_variables {
+            let globals = crate::scheduler::Scheduler::get_globals_for_compilation();
+            for (symbol, var) in &globals {
                 let const_value = builder.ins().iconst(types::I64, var.as_u64() as i64);
                 analyzer.variables.insert(*symbol, const_value);
             }

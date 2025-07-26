@@ -89,14 +89,14 @@ impl LispTuple {
         unsafe {
             let old_length = (*ptr).length;
             let new_length = old_length + 1;
-            
+
             // Create new tuple with space for one more element
             let new_ptr = Self::with_capacity(new_length as usize);
             (*new_ptr).length = new_length;
-            
+
             let old_data = Self::data_ptr(ptr);
             let new_data = Self::data_ptr(new_ptr);
-            
+
             // Set first element to the new element
             with_write_barrier!(
                 new_ptr as *mut u8,
@@ -106,12 +106,12 @@ impl LispTuple {
                     *new_data = element;
                 }
             );
-            
+
             // Copy remaining elements from old tuple
             for i in 0..old_length as usize {
                 let old_element = *old_data.add(i);
                 let new_slot_ptr = new_data.add(i + 1);
-                
+
                 with_write_barrier!(
                     new_ptr as *mut u8,
                     new_slot_ptr,
@@ -121,30 +121,30 @@ impl LispTuple {
                     }
                 );
             }
-            
+
             new_ptr
         }
     }
 
-    /// Create a new tuple by appending an element 
+    /// Create a new tuple by appending an element
     /// This creates a new tuple rather than mutating the existing one
     pub unsafe fn append(ptr: *mut LispTuple, element: Var) -> *mut LispTuple {
         unsafe {
             let old_length = (*ptr).length;
             let new_length = old_length + 1;
-            
+
             // Create new tuple with space for one more element
             let new_ptr = Self::with_capacity(new_length as usize);
             (*new_ptr).length = new_length;
-            
+
             let old_data = Self::data_ptr(ptr);
             let new_data = Self::data_ptr(new_ptr);
-            
+
             // Copy existing elements first
             for i in 0..old_length as usize {
                 let old_element = *old_data.add(i);
                 let new_slot_ptr = new_data.add(i);
-                
+
                 with_write_barrier!(
                     new_ptr as *mut u8,
                     new_slot_ptr,
@@ -154,7 +154,7 @@ impl LispTuple {
                     }
                 );
             }
-            
+
             // Add new element at the end
             let new_slot_ptr = new_data.add(old_length as usize);
             with_write_barrier!(
@@ -165,7 +165,7 @@ impl LispTuple {
                     *new_slot_ptr = element;
                 }
             );
-            
+
             new_ptr
         }
     }
