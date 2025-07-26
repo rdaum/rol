@@ -14,20 +14,11 @@
 //! Standalone fibonacci benchmark for profiling.
 //! Runs fibonacci computation in a loop for detailed performance analysis.
 
-mod ast;
-mod bytecode;
-mod gc;
-mod heap;
-mod jit;
-mod lexer;
-mod parser;
-mod protocol;
-mod repl;
-mod symbol;
-mod var;
-
-use repl::Repl;
 use std::time::Instant;
+use crate::repl::Repl;
+
+mod repl;
+
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("ROL Fibonacci Standalone Benchmark");

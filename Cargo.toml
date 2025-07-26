@@ -3,6 +3,14 @@ name = "rol"
 version = "0.1.0"
 edition = "2024"
 
+[[bin]]
+name = "fib_bench"
+path = "src/bin/fib_bench.rs"
+
+[[bin]]
+name = "repl"
+path = "src/bin/main.rs"
+
 [dependencies]
 ahash = "0.8"
 boxcar = "0.2"
@@ -20,6 +28,3 @@ cranelift-native = "0.122"
 # GC! Enable vm_space feature for GenImmix virtual memory management
 mmtk = { version = "0.31.0", features = ["vm_space"] }
 
-[[bin]]
-name = "fib_bench"
-path = "src/fib_bench.rs"

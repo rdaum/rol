@@ -16,3 +16,4 @@ pub mod var;
 
 // Re-export main public APIs
 pub use gc::{initialize_mmtk, mmtk_bind_mutator};
+pub use var::{Var};
