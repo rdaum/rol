@@ -2,6 +2,7 @@ mod environment;
 mod flexible_utils;
 mod lisp_closure;
 mod lisp_string;
+mod lisp_task;
 mod lisp_tuple;
 
 pub use environment::{
@@ -10,4 +11,5 @@ pub use environment::{
 };
 pub use lisp_closure::LispClosure;
 pub use lisp_string::LispString;
+pub use lisp_task::{LispTask, TaskResult, TaskState};
 pub use lisp_tuple::LispTuple;

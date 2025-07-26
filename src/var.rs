@@ -23,7 +23,7 @@
 //! Based on https://github.com/zuiderkwast/Var/blob/master/Var.h
 
 use crate::gc::{is_mmtk_initialized, register_var_as_root};
-use crate::heap::{Environment, LispClosure, LispString, LispTuple};
+use crate::heap::{Environment, LispClosure, LispString, LispTask, LispTuple};
 use crate::protocol::{TypeProtocol, get_protocol};
 use crate::symbol::Symbol;
 use std::cmp::Ordering;
@@ -49,6 +49,7 @@ pub const TUPLE_POINTER_TAG: u64 = 0x1000000000000000;
 pub const STRING_POINTER_TAG: u64 = 0x2000000000000000;
 pub const CLOSURE_POINTER_TAG: u64 = 0x3000000000000000;
 pub const ENVIRONMENT_POINTER_TAG: u64 = 0x5000000000000000;
+pub const TASK_POINTER_TAG: u64 = 0x6000000000000000;
 pub const POINTER_TAG_MASK: u64 = 0xF000000000000000;
 
 pub const SYMBOL_TAG: u64 = 0x0009000000000000;
@@ -85,6 +86,7 @@ pub enum VarType {
     String,
     Environment,
     Closure,
+    Task,
 }
 
 impl Default for Var {
@@ -116,6 +118,9 @@ impl Var {
         }
         if self.is_closure() {
             return VarType::Closure;
+        }
+        if self.is_task() {
+            return VarType::Task;
         }
         if self.is_int() {
             return VarType::I32;
@@ -229,6 +234,21 @@ impl Var {
         var
     }
 
+    /// Create a Var from a task pointer
+    pub fn task(ptr: *mut LispTask) -> Self {
+        let ptr_bits = ptr as u64;
+        let tagged_ptr = ptr_bits | TASK_POINTER_TAG;
+        let var = Self(ValueUnion { value: tagged_ptr });
+
+        // Register the task as a thread root immediately
+        // This prevents GC from collecting it during execution
+        if is_mmtk_initialized() {
+            register_var_as_root(var, false); // false = thread root
+        }
+
+        var
+    }
+
     pub fn is_none(&self) -> bool {
         unsafe { self.0.value == NULL }
     }
@@ -302,6 +322,11 @@ impl Var {
     pub fn is_closure(&self) -> bool {
         let v = unsafe { self.0.value };
         (v & 0x03) == 0 && v >= MIN_POINTER && (v & POINTER_TAG_MASK) == CLOSURE_POINTER_TAG
+    }
+
+    pub fn is_task(&self) -> bool {
+        let v = unsafe { self.0.value };
+        (v & 0x03) == 0 && v >= MIN_POINTER && (v & POINTER_TAG_MASK) == TASK_POINTER_TAG
     }
 
     pub unsafe fn as_pointer<T>(&self) -> Option<*const T> {
@@ -414,6 +439,15 @@ impl Var {
         }
     }
 
+    pub fn as_task(&self) -> Option<*mut LispTask> {
+        if self.is_task() {
+            let ptr_bits = unsafe { self.0.value } & !POINTER_TAG_MASK;
+            Some(ptr_bits as *mut LispTask)
+        } else {
+            None
+        }
+    }
+
     pub fn as_u64(&self) -> u64 {
         unsafe { self.0.value }
     }
@@ -475,6 +509,7 @@ impl Var {
             VarType::String => !self.as_string().unwrap().is_empty(),
             VarType::Environment => true, // Environments are always truthy
             VarType::Closure => true,     // Closures are always truthy
+            VarType::Task => true,        // Tasks are always truthy
         }
     }
 
@@ -609,6 +644,20 @@ impl fmt::Debug for Var {
                     write!(f, "Var::Closure(invalid)")
                 }
             }
+            VarType::Task => {
+                if let Some(task_ptr) = self.as_task() {
+                    unsafe {
+                        write!(
+                            f,
+                            "Var::Task(id={}, state={:?})",
+                            (*task_ptr).task_id,
+                            (*task_ptr).get_state()
+                        )
+                    }
+                } else {
+                    write!(f, "Var::Task(invalid)")
+                }
+            }
         }
     }
 }
@@ -652,6 +701,13 @@ impl fmt::Display for Var {
                     unsafe { write!(f, "closure(arity={})", (*closure_ptr).arity) }
                 } else {
                     write!(f, "closure(invalid)")
+                }
+            }
+            VarType::Task => {
+                if let Some(task_ptr) = self.as_task() {
+                    unsafe { write!(f, "task(id={})", (*task_ptr).task_id) }
+                } else {
+                    write!(f, "task(invalid)")
                 }
             }
         }
@@ -1460,5 +1516,53 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_task_var_integration() {
+        use crate::gc::ensure_mmtk_initialized_for_tests;
+        use crate::heap::{LispTask, TaskState};
+        use std::collections::HashMap;
+
+        // Initialize MMTk for testing
+        ensure_mmtk_initialized_for_tests();
+
+        // Create a task
+        let closure = Var::none();
+        let globals = HashMap::new();
+        let task_ptr = LispTask::new(42, closure, globals);
+
+        // Create a Var from the task pointer
+        let task_var = Var::task(task_ptr);
+
+        // Test type checking
+        assert!(task_var.is_task());
+        assert!(!task_var.is_closure());
+        assert!(!task_var.is_tuple());
+        assert_eq!(task_var.get_type(), VarType::Task);
+
+        // Test pointer extraction
+        if let Some(extracted_ptr) = task_var.as_task() {
+            assert_eq!(extracted_ptr, task_ptr);
+
+            unsafe {
+                let task = &*extracted_ptr;
+                assert_eq!(task.task_id, 42);
+                assert_eq!(task.get_state(), TaskState::Ready);
+            }
+        } else {
+            panic!("Failed to extract task pointer");
+        }
+
+        // Test truthiness
+        assert!(task_var.is_truthy());
+        assert!(!task_var.is_falsy());
+
+        // Test display formatting
+        let debug_str = format!("{:?}", task_var);
+        assert!(debug_str.contains("Task(id=42"));
+
+        let display_str = format!("{}", task_var);
+        assert!(display_str.contains("task(id=42"));
     }
 }

@@ -142,6 +142,13 @@ impl Repl {
                     "#<closure:invalid>".to_string()
                 }
             }
+            VarType::Task => {
+                if let Some(task_ptr) = var.as_task() {
+                    unsafe { format!("#<task:{}>", (*task_ptr).task_id) }
+                } else {
+                    "#<task:invalid>".to_string()
+                }
+            }
         }
     }
 

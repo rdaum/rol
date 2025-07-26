@@ -71,6 +71,7 @@ pub fn get_protocol(var_type: VarType) -> &'static TypeProtocol {
         VarType::Environment => &ENVIRONMENT_PROTOCOL,
         VarType::Pointer => &POINTER_PROTOCOL,
         VarType::Closure => &CLOSURE_PROTOCOL,
+        VarType::Task => &TASK_PROTOCOL,
     }
 }
 
@@ -486,5 +487,60 @@ static CLOSURE_PROTOCOL: TypeProtocol = TypeProtocol {
     },
     drop: |ptr| unsafe {
         crate::heap::LispClosure::free(ptr as *mut crate::heap::LispClosure);
+    },
+};
+
+static TASK_PROTOCOL: TypeProtocol = TypeProtocol {
+    to_string: |ptr| unsafe {
+        let task = ptr as *const crate::heap::LispTask;
+        format!("task(id={})", (*task).task_id)
+    },
+
+    // Basic hashing and comparison for tasks (based on task ID)
+    hash: |ptr| unsafe {
+        let task = ptr as *const crate::heap::LispTask;
+        (*task).task_id
+    },
+    equals: |a, b| unsafe {
+        let task_a = a as *const crate::heap::LispTask;
+        let task_b = b as *const crate::heap::LispTask;
+        (*task_a).task_id == (*task_b).task_id
+    },
+    compare: |a, b| unsafe {
+        let task_a = a as *const crate::heap::LispTask;
+        let task_b = b as *const crate::heap::LispTask;
+        let id_a = (*task_a).task_id;
+        let id_b = (*task_b).task_id;
+        if id_a < id_b {
+            -1
+        } else if id_a > id_b {
+            1
+        } else {
+            0
+        }
+    },
+
+    // Task-specific operations
+    length: Some(|ptr| unsafe {
+        let task = ptr as *const crate::heap::LispTask;
+        (*task).globals_count() as i32
+    }),
+    get: Some(|_, _| crate::var::Var::none()), // Tasks don't support indexing
+    put: None,                                 // Tasks are not mutable via protocol
+    next: None,                                // Tasks are not iterable
+
+    call: None, // Tasks are not directly callable (use scheduler)
+
+    is_truthy: |_| true, // Tasks are always truthy
+
+    // Memory management for tasks
+    clone: |ptr| {
+        // For now, just return the same pointer (shared ownership)
+        // In a real implementation, we'd properly clone the task
+        ptr as *mut ()
+    },
+    drop: |_ptr| {
+        // Task cleanup is handled by the scheduler
+        // Don't free directly as tasks may be referenced by scheduler
     },
 };
